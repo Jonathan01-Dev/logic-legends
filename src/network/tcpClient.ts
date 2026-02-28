@@ -1,3 +1,4 @@
+// src/network/tcpClient.ts
 import net from 'net';
 import crypto from 'crypto';
 import { EventEmitter } from 'events';
@@ -19,10 +20,7 @@ class TcpStreamParser extends EventEmitter {
     this.buffer = Buffer.concat([this.buffer, chunk]);
     while (this.buffer.length >= this.HEADER_SIZE) {
       const magic = this.buffer.readUInt32BE(0);
-      if (magic !== 0x41524348) { 
-        this.socket.destroy(); 
-        return; 
-      }
+      if (magic !== 0x41524348) { this.socket.destroy(); return; }
       const payloadLen = this.buffer.readUInt32BE(37);
       const totalPacketSize = this.HEADER_SIZE + payloadLen;
       if (this.buffer.length >= totalPacketSize) {
@@ -50,7 +48,7 @@ export class TcpClient {
 
   private buildPacket(type: PacketType, payload: Buffer): Buffer {
     const buf = Buffer.alloc(41 + payload.length);
-    buf.writeUInt32BE(0x41524348, 0); 
+    buf.writeUInt32BE(0x41524348, 0);
     buf.writeUInt8(type, 4);
     this.nodeId.copy(buf, 5);
     buf.writeUInt32BE(payload.length, 37);
@@ -58,11 +56,20 @@ export class TcpClient {
     return buf;
   }
 
+  // Affiche une barre de progression propre dans le terminal
+  private drawProgressBar(current: number, total: number) {
+    const percentage = Math.floor((current / total) * 10);
+    const bar = "█".repeat(percentage) + "░".repeat(10 - percentage);
+    process.stdout.write(`\r[TRANSFERT] [${bar}] ${Math.floor((current / total) * 100)}% (${current}/${total} chunks)`);
+  }
+
   private requestNextChunk() {
     if (!this.currentManifest || !this.socket) return;
-    const reqPayload = Buffer.alloc(68); 
+
+    const reqPayload = Buffer.alloc(68);
     Buffer.from(this.currentManifest.fileHash).copy(reqPayload, 0);
     reqPayload.writeUInt32BE(this.nextChunkIndex, 64);
+    
     this.socket.write(this.buildPacket(PacketType.CHUNK_REQ, this.session.encrypt(reqPayload)));
   }
 
@@ -72,10 +79,11 @@ export class TcpClient {
     });
 
     this.socket.on('error', (err: any) => {
-      if (err.code !== 'ECONNRESET') console.error(`[TCP CLIENT] Erreur : ${err.message}`);
+      if (err.code !== 'ECONNRESET') console.error(`\n[TCP CLIENT] Erreur : ${err.message}`);
     });
 
     const parser = new TcpStreamParser(this.socket);
+
     parser.on('packet', (packetBuffer: Buffer) => {
       const type = packetBuffer.readUInt8(4);
       const payload = packetBuffer.subarray(41, 41 + packetBuffer.readUInt32BE(37));
@@ -83,14 +91,8 @@ export class TcpClient {
       if (type === PacketType.HANDSHAKE) {
         this.session.deriveSharedSecret(payload);
         if (manifestToShare) {
-          // LOG CRITIQUE S3 : On vérifie si l'envoi démarre
-          console.log(`[TCP CLIENT] Début de l'envoi du manifeste (${manifestToShare.fileName})...`);
-          const encryptedManifest = this.session.encrypt(Buffer.from(JSON.stringify(manifestToShare)));
-          
-          this.socket?.write(this.buildPacket(PacketType.MANIFEST, encryptedManifest), () => {
-             // CALLBACK : S'exécute quand le buffer est vidé
-             console.log(`[TCP CLIENT] ENVOI DU MANIFESTE TERMINÉ ✅`);
-          });
+          const encrypted = this.session.encrypt(Buffer.from(JSON.stringify(manifestToShare)));
+          this.socket?.write(this.buildPacket(PacketType.MANIFEST, encrypted));
         }
       } 
       else if (type === PacketType.MANIFEST) {
@@ -98,22 +100,32 @@ export class TcpClient {
           const decrypted = this.session.decrypt(payload);
           this.currentManifest = JSON.parse(decrypted.toString('utf-8'));
           this.nextChunkIndex = 0;
-          console.log(`[CLIENT] Manifeste reçu : ${this.currentManifest?.chunks.length} chunks.`);
-          this.requestNextChunk();
-        } catch (e) { console.error("[CLIENT] Erreur lecture manifeste."); }
+          console.log(`\n[CLIENT] Réception de : ${this.currentManifest?.fileName}`);
+          this.requestNextChunk(); // Démarre la boucle de téléchargement
+        } catch (e) { console.error("\n[CLIENT] Erreur manifeste"); }
       }
       else if (type === PacketType.CHUNK_DATA) {
         try {
+          if (!this.currentManifest) return;
           const chunkData = this.session.decrypt(payload);
+          
+          // Vérification SHA-256 en live
           const receivedHash = crypto.createHash('sha256').update(chunkData).digest('hex');
-          if (receivedHash === this.currentManifest!.chunks[this.nextChunkIndex].hash) {
-            this.fileManager.saveChunk(this.currentManifest!.fileName, this.nextChunkIndex, chunkData);
-            if (this.nextChunkIndex % 100 === 0) console.log(`[PROGRESS] Chunk ${this.nextChunkIndex} OK`);
+          const expectedHash = this.currentManifest.chunks[this.nextChunkIndex].hash;
+
+          if (receivedHash === expectedHash) {
+            this.fileManager.saveChunk(this.currentManifest.fileName, this.nextChunkIndex, chunkData);
             this.nextChunkIndex++;
-            if (this.nextChunkIndex < this.currentManifest!.chunks.length) this.requestNextChunk();
-            else console.log(`✅ TRANSFERT RÉUSSI !`);
+            
+            this.drawProgressBar(this.nextChunkIndex, this.currentManifest.chunks.length);
+
+            if (this.nextChunkIndex < this.currentManifest.chunks.length) {
+              this.requestNextChunk();
+            } else {
+              console.log(`\n✅ SUCCÈS : Fichier ${this.currentManifest.fileName} complet.`);
+            }
           }
-        } catch (e) { console.error("[CLIENT] Erreur chunk."); }
+        } catch (e) { console.error("\n[CLIENT] Erreur chunk"); }
       }
     });
   }
