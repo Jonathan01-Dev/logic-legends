@@ -34,7 +34,8 @@ export class CLI {
       if (input.startsWith('archipel ')) input = input.replace('archipel ', '');
       if (!input) { this.rl.prompt(); return; }
 
-      const args = input.split(' ');
+      // Amélioration : permet de lire les arguments avec des guillemets correctement
+      const args = input.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
       const cmd = args[0].toLowerCase();
 
       switch (cmd) {
@@ -49,16 +50,19 @@ export class CLI {
           const targetId = args[1];
           if (!targetId) console.log("❌ Syntaxe : trust <node_id>");
           else {
-            this.trustedPeers.add(targetId);
+            this.trustedPeers.add(targetId.replace(/"/g, ''));
             console.log(`✅ [Web of Trust] Nœud ${targetId} approuvé localement.`);
           }
           break;
         case 'download':
-          const fileName = args[1];
+          let fileName = args[1];
           if (!fileName) {
             console.log("❌ Syntaxe : download <nom_du_fichier>");
             break;
           }
+          
+          // Nettoyage des guillemets pour la recherche
+          fileName = fileName.replace(/"/g, '');
           
           const results = this.networkDirectory.searchFiles(fileName);
           if (results.length === 0) {
@@ -74,7 +78,7 @@ export class CLI {
             break;
           }
 
-          // Lancement manuel du téléchargement (autoDownload = true)
+          console.log(`📥 Initiation du téléchargement de ${fileName} depuis ${owner.ip}...`);
           const client = new TcpClient(Buffer.from(this.nodeIdHex, 'hex'), this.fileManager, this.networkDirectory);
           client.connect(owner.ip, owner.tcp_port, null, true);
           break;
@@ -92,7 +96,6 @@ export class CLI {
         default: console.log(`❌ Commande inconnue: ${cmd}.`); break;
       }
       
-      // Petit délai pour laisser la commande éventuelle s'afficher avant de remettre le prompt
       setTimeout(() => this.rl.prompt(), 100);
     });
   }
@@ -126,7 +129,7 @@ exit                    : Quitter\n`);
     if (files.length === 0) console.log("📁 Aucun fichier répertorié sur le réseau.");
     else {
       console.log(`\n📁 --- FICHIERS DISPONIBLES ---`);
-      files.forEach(f => console.log(`- ${f.manifest.fileName} (${(f.manifest.totalSize / 1024 / 1024).toFixed(2)} Mo) [Propriétaire: ${f.ownerId.substring(0, 8)}]`));
+      files.forEach(f => console.log(`- ${f.manifest.fileName} [Propriétaire: ${f.ownerId.substring(0, 8)}]`));
     }
   }
 }
