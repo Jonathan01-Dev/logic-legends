@@ -14,7 +14,7 @@ export class Discovery {
     private nodeId: Buffer, 
     private tcpPort: number, 
     private fileManager: FileManager, 
-    private networkDirectory: NetworkDirectory, // Reçu de index.ts
+    private networkDirectory: NetworkDirectory, 
     private manifestToShare: FileManifest | null = null
   ) {
     this.socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
@@ -38,7 +38,7 @@ export class Discovery {
 
         if (isNew) {
           console.log(`[UDP] Nouveau pair : ${rinfo.address}:${remoteTcpPort}`);
-          // CRUCIAL : On passe this.networkDirectory ici !
+          // LA CORRECTION EST ICI : On passe bien les 3 arguments requis
           const client = new TcpClient(this.nodeId, this.fileManager, this.networkDirectory);
           client.connect(rinfo.address, remoteTcpPort, this.manifestToShare);
         }

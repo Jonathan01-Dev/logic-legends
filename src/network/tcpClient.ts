@@ -10,21 +10,15 @@ import { NetworkDirectory } from './networkDirectory';
 class TcpStreamParser extends EventEmitter {
   private buffer: Buffer = Buffer.alloc(0);
   private readonly HEADER_SIZE = 41;
-
   constructor(private socket: net.Socket) {
     super();
     this.socket.on('data', (chunk) => this.handleData(chunk as Buffer));
   }
-
   private handleData(chunk: Buffer) {
     this.buffer = Buffer.concat([this.buffer, chunk]);
     while (this.buffer.length >= this.HEADER_SIZE) {
       const magic = this.buffer.readUInt32BE(0);
-      if (magic !== 0x41524348) { 
-        this.buffer = Buffer.alloc(0); 
-        this.socket.destroy(); 
-        return; 
-      }
+      if (magic !== 0x41524348) { this.socket.destroy(); return; }
       const payloadLen = this.buffer.readUInt32BE(37);
       const totalPacketSize = this.HEADER_SIZE + payloadLen;
       if (this.buffer.length >= totalPacketSize) {
@@ -46,10 +40,9 @@ export class TcpClient {
   constructor(
     private nodeId: Buffer, 
     private fileManager: FileManager, 
-    private networkDirectory: NetworkDirectory // Injection obligatoire
+    private networkDirectory: NetworkDirectory 
   ) {
     this.session = new CryptoSession();
-    // Sécurité anti-crash
     if (!this.networkDirectory) {
       throw new Error("NetworkDirectory est requis pour initialiser TcpClient");
     }
@@ -93,18 +86,13 @@ export class TcpClient {
         try {
           const decrypted = this.session.decrypt(payload);
           const manifest = JSON.parse(decrypted.toString('utf-8'));
-          
-          // Utilisation de l'annuaire injecté
           this.networkDirectory.updateFile(manifest, this.remoteNodeId);
-
           if (!this.fileManager.hasFile(manifest.fileHash)) {
             this.currentManifest = manifest;
             this.nextChunkIndex = 0;
             this.requestNextChunk();
           }
-        } catch (e: any) {
-          console.error(`\n[CLIENT] Erreur manifeste : ${e.message}`);
-        }
+        } catch (e: any) { console.error(`[CLIENT] Erreur manifeste : ${e.message}`); }
       }
       else if (type === PacketType.CHUNK_DATA) {
         try {
@@ -114,8 +102,8 @@ export class TcpClient {
           const pct = Math.floor((this.nextChunkIndex / this.currentManifest!.chunks.length) * 100);
           process.stdout.write(`\r[TRANSFERT] ${pct}% (${this.nextChunkIndex}/${this.currentManifest!.chunks.length})`);
           if (this.nextChunkIndex < this.currentManifest!.chunks.length) this.requestNextChunk();
-          else console.log("\n✅ Transfert terminé avec succès !");
-        } catch (e) { console.error("\n[CLIENT] Erreur chunk"); }
+          else console.log("\n✅ Reçu !");
+        } catch (e) { console.error("[CLIENT] Erreur chunk"); }
       }
     });
   }
