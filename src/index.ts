@@ -36,7 +36,7 @@ const tcpServer = new TcpServer(nodeId, tcpPort, fileManager);
 tcpServer.start();
 
 // 6. Lancement de la Découverte UDP
-const discovery = new Discovery(nodeId, tcpPort);
+const discovery = new Discovery(nodeId, tcpPort, fileManager);
 discovery.start();
 
 console.log(`--------------------------------------------------`);
