@@ -43,8 +43,16 @@ export class TcpClient {
   private nextChunkIndex: number = 0;
   private remoteNodeId: string = "";
 
-  constructor(private nodeId: Buffer, private fileManager: FileManager, private networkDirectory: NetworkDirectory) {
+  constructor(
+    private nodeId: Buffer, 
+    private fileManager: FileManager, 
+    private networkDirectory: NetworkDirectory // Injection obligatoire
+  ) {
     this.session = new CryptoSession();
+    // Sécurité anti-crash
+    if (!this.networkDirectory) {
+      throw new Error("NetworkDirectory est requis pour initialiser TcpClient");
+    }
   }
 
   private buildPacket(type: PacketType, payload: Buffer): Buffer {
@@ -84,18 +92,14 @@ export class TcpClient {
       else if (type === PacketType.MANIFEST) {
         try {
           const decrypted = this.session.decrypt(payload);
-          const rawText = decrypted.toString('utf-8');
+          const manifest = JSON.parse(decrypted.toString('utf-8'));
           
-          // DIAGNOSTIC SPRINT 4
-          console.log(`[DEBUG] Reçu : ${rawText.substring(0, 50)}...`);
-
-          const manifest = JSON.parse(rawText);
+          // Utilisation de l'annuaire injecté
           this.networkDirectory.updateFile(manifest, this.remoteNodeId);
 
           if (!this.fileManager.hasFile(manifest.fileHash)) {
             this.currentManifest = manifest;
             this.nextChunkIndex = 0;
-            console.log(`[CLIENT] Téléchargement de ${manifest.fileName}`);
             this.requestNextChunk();
           }
         } catch (e: any) {
@@ -108,9 +112,9 @@ export class TcpClient {
           this.fileManager.saveChunk(this.currentManifest!.fileName, this.nextChunkIndex, chunkData);
           this.nextChunkIndex++;
           const pct = Math.floor((this.nextChunkIndex / this.currentManifest!.chunks.length) * 100);
-          process.stdout.write(`\r[TRANSFERT] ${pct}%`);
+          process.stdout.write(`\r[TRANSFERT] ${pct}% (${this.nextChunkIndex}/${this.currentManifest!.chunks.length})`);
           if (this.nextChunkIndex < this.currentManifest!.chunks.length) this.requestNextChunk();
-          else console.log("\n✅ Reçu !");
+          else console.log("\n✅ Transfert terminé avec succès !");
         } catch (e) { console.error("\n[CLIENT] Erreur chunk"); }
       }
     });
