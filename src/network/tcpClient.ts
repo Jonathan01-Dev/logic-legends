@@ -35,11 +35,8 @@ export class TcpClient {
   private session: CryptoSession = new CryptoSession();
   private currentManifest: FileManifest | null = null;
   private nextChunkIndex: number = 0;
-  private remoteNodeId: string = "";
 
-  constructor(private nodeId: Buffer, private fileManager: FileManager, private networkDirectory: NetworkDirectory) {
-    if (!this.networkDirectory) throw new Error("NetworkDirectory requis");
-  }
+  constructor(private nodeId: Buffer, private fileManager: FileManager, private networkDirectory: NetworkDirectory) {}
 
   private buildPacket(type: PacketType, payload: Buffer): Buffer {
     const buf = Buffer.alloc(41 + payload.length);
@@ -53,9 +50,7 @@ export class TcpClient {
     const reqPayload = Buffer.alloc(68);
     Buffer.from(this.currentManifest.fileHash).copy(reqPayload, 0);
     reqPayload.writeUInt32BE(this.nextChunkIndex, 64);
-    try {
-        this.socket.write(this.buildPacket(PacketType.CHUNK_REQ, this.session.encrypt(reqPayload)));
-    } catch (e) {}
+    try { this.socket.write(this.buildPacket(PacketType.CHUNK_REQ, this.session.encrypt(reqPayload))); } catch (e) {}
   }
 
   public connect(ip: string, port: number, manifestToShare: FileManifest | null = null) {
@@ -63,16 +58,12 @@ export class TcpClient {
       this.socket?.write(this.buildPacket(PacketType.HANDSHAKE, this.session.ephemeralPublicKey));
     });
 
-    this.socket.on('error', (err: any) => {});
-
     const parser = new TcpStreamParser(this.socket);
     parser.on('packet', (packetBuffer: Buffer) => {
       const type = packetBuffer.readUInt8(4);
-      const senderId = packetBuffer.subarray(5, 37).toString('hex');
       const payload = packetBuffer.subarray(41, 41 + packetBuffer.readUInt32BE(37));
 
       if (type === PacketType.HANDSHAKE) {
-        this.remoteNodeId = senderId;
         this.session.deriveSharedSecret(payload);
         if (manifestToShare) {
           const encrypted = this.session.encrypt(Buffer.from(JSON.stringify(manifestToShare)));
@@ -82,26 +73,23 @@ export class TcpClient {
       else if (type === PacketType.MANIFEST) {
         try {
           const decrypted = this.session.decrypt(payload);
-          const manifest = JSON.parse(decrypted.toString('utf-8'));
-          this.networkDirectory.updateFile(manifest, this.remoteNodeId);
-          if (!this.fileManager.hasFile(manifest.fileHash)) {
-            this.currentManifest = manifest;
+          this.currentManifest = JSON.parse(decrypted.toString('utf-8'));
+          console.log(`[CLIENT] Manifeste reçu : ${this.currentManifest?.fileName}`);
+          this.networkDirectory.updateFile(this.currentManifest!, "remote");
+          if (!this.fileManager.hasFile(this.currentManifest!.fileHash)) {
             this.nextChunkIndex = 0;
             this.requestNextChunk();
           }
-        } catch (e: any) { console.error(`[CLIENT] Erreur manifeste : ${e.message}`); }
+        } catch (e) {}
       }
       else if (type === PacketType.CHUNK_DATA) {
         try {
           const chunkData = this.session.decrypt(payload);
           this.fileManager.saveChunk(this.currentManifest!.fileName, this.nextChunkIndex, chunkData);
           this.nextChunkIndex++;
-          if (this.nextChunkIndex % 50 === 0 || this.nextChunkIndex === this.currentManifest!.chunks.length) {
-              const pct = Math.floor((this.nextChunkIndex / this.currentManifest!.chunks.length) * 100);
-              process.stdout.write(`\r[TRANSFERT] ${pct}%`);
-          }
+          if (this.nextChunkIndex % 50 === 0) process.stdout.write(`\r[TRANSFERT PC3] ${Math.floor((this.nextChunkIndex / this.currentManifest!.chunks.length) * 100)}%`);
           if (this.nextChunkIndex < this.currentManifest!.chunks.length) this.requestNextChunk();
-          else console.log("\n✅ Reçu sur ce nœud !");
+          else console.log("\n✅ PC 3 a fini !");
         } catch (e) {}
       }
     });
