@@ -7,12 +7,6 @@ import { FileManager } from './network/fileManager';
 async function main() {
   try {
     const keyFile = path.join(process.cwd(), 'keys', 'node_identity.json');
-    
-    if (!fs.existsSync(keyFile)) {
-      console.error('❌ Fichier node_identity.json introuvable dans /keys');
-      return;
-    }
-
     const identity = JSON.parse(fs.readFileSync(keyFile, 'utf-8'));
     const nodeId = Buffer.from(identity.ed25519.publicKey, 'hex');
 
@@ -22,25 +16,25 @@ async function main() {
     const fileManager = new FileManager();
     const sharedPath = path.join(process.cwd(), 'shared');
 
-    // Vérification du dossier shared
-    if (!fs.existsSync(sharedPath)) {
-      fs.mkdirSync(sharedPath);
-    }
+    if (!fs.existsSync(sharedPath)) fs.mkdirSync(sharedPath);
 
-    // Scan des fichiers à partager
     let localManifest = null;
-    const files = fs.readdirSync(sharedPath).filter(f => 
-      !f.startsWith('DOWNLOAD_') && f !== '.gitkeep'
-    );
+    const files = fs.readdirSync(sharedPath).filter(f => !f.startsWith('DOWNLOAD_') && f !== '.gitkeep');
 
     if (files.length > 0) {
       console.log(`[SYSTEM] Indexation de : ${files[0]}...`);
       localManifest = fileManager.shareFile(files[0]);
     } else {
-      console.log(`[SYSTEM] Mode receveur uniquement (dossier shared vide).`);
+      console.log(`[SYSTEM] Mode receveur uniquement.`);
     }
 
     const tcpServer = new TcpServer(nodeId, tcpPort, fileManager);
+    
+    // ACTION CRUCIALE : On donne le manifeste au serveur
+    if (localManifest) {
+      tcpServer.setManifest(localManifest);
+    }
+    
     tcpServer.start();
 
     const discovery = new Discovery(nodeId, tcpPort, fileManager, localManifest);
