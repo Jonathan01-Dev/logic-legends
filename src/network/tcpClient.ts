@@ -46,14 +46,6 @@ export class TcpClient {
     payload.copy(buf, 41); return buf;
   }
 
-  private drawProgressBar(current: number, total: number) {
-    const width = 20;
-    const progress = Math.floor((current / total) * width);
-    const bar = "█".repeat(progress) + "░".repeat(width - progress);
-    const percent = Math.floor((current / total) * 100);
-    process.stdout.write(`\r[PROGRESSION] [${bar}] ${percent}% (${current}/${total})`);
-  }
-
   private requestNextChunk() {
     if (!this.currentManifest || !this.socket) return;
     const reqPayload = Buffer.alloc(68);
@@ -85,14 +77,13 @@ export class TcpClient {
         try {
           const decrypted = this.session.decrypt(payload);
           const manifest = JSON.parse(decrypted.toString('utf-8'));
-          
           if (!this.fileManager.hasFile(manifest.fileHash)) {
             this.currentManifest = manifest;
             this.nextChunkIndex = 0;
-            console.log(`\n[CLIENT] Nouveau fichier détecté: ${manifest.fileName}. Téléchargement...`);
+            console.log(`\n[CLIENT] Réception de : ${manifest.fileName}. Lancement...`);
             this.requestNextChunk();
           }
-        } catch (e) { console.error("\n[CLIENT] Erreur Manifeste"); }
+        } catch (e) { console.error("\n[CLIENT] Erreur déchiffrement manifeste"); }
       }
       else if (type === PacketType.CHUNK_DATA) {
         try {
@@ -103,12 +94,14 @@ export class TcpClient {
           if (receivedHash === this.currentManifest.chunks[this.nextChunkIndex].hash) {
             this.fileManager.saveChunk(this.currentManifest.fileName, this.nextChunkIndex, chunkData);
             this.nextChunkIndex++;
-            this.drawProgressBar(this.nextChunkIndex, this.currentManifest.chunks.length);
             
-            if (this.nextChunkIndex % 100 === 0) console.log(""); // Flush log pour Windows
+            if (this.nextChunkIndex % 50 === 0 || this.nextChunkIndex === this.currentManifest.chunks.length) {
+                const pct = Math.floor((this.nextChunkIndex / this.currentManifest.chunks.length) * 100);
+                process.stdout.write(`\r[PROGRESSION] ${pct}% (${this.nextChunkIndex}/${this.currentManifest.chunks.length})`);
+            }
 
             if (this.nextChunkIndex < this.currentManifest.chunks.length) this.requestNextChunk();
-            else console.log(`\n✅ TRANSFERT RÉUSSI: ${this.currentManifest.fileName}`);
+            else console.log(`\n✅ TRANSFERT RÉUSSI : ${this.currentManifest.fileName}`);
           }
         } catch (e) { console.error("\n[CLIENT] Erreur Chunk"); }
       }

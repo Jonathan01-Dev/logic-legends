@@ -1,4 +1,3 @@
-// src/models/manifest.ts
 import crypto from 'crypto';
 
 export interface FileChunk {
@@ -15,7 +14,7 @@ export interface FileManifest {
 }
 
 export function generateManifest(fileName: string, fileBuffer: Buffer): FileManifest {
-  const CHUNK_SIZE = 1024; // Taille fixe imposée
+  const CHUNK_SIZE = 16384; // 16 Ko : Optimisé pour les fichiers de 50 Mo
   const chunks: FileChunk[] = [];
   
   const totalHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');

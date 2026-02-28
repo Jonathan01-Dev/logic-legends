@@ -55,7 +55,7 @@ export class TcpServer {
           const decrypted = session.decrypt(payload);
           const manifest = JSON.parse(decrypted.toString('utf-8'));
           this.fileManager.registerRemoteManifest(manifest);
-          console.log(`[TCP SERVER] Manifeste indexé: ${manifest.fileName}`);
+          console.log(`[TCP SERVER] Manifeste reçu : ${manifest.fileName}`);
         } catch (err) { console.error("[SERVER] Erreur Manifeste"); }
       }
       else if (type === PacketType.CHUNK_REQ) {
