@@ -1,4 +1,3 @@
-// src/network/tcpClient.ts
 import net from 'net';
 import crypto from 'crypto';
 import { EventEmitter } from 'events';
@@ -33,25 +32,18 @@ class TcpStreamParser extends EventEmitter {
 export class TcpClient {
   private socket: net.Socket | null = null;
   private session: CryptoSession;
-  private nodeId: Buffer;
-  private fileManager: FileManager;
   private currentManifest: FileManifest | null = null;
   private nextChunkIndex: number = 0;
 
-  constructor(nodeId: Buffer, fileManager: FileManager) {
-    this.nodeId = nodeId;
-    this.fileManager = fileManager;
+  constructor(private nodeId: Buffer, private fileManager: FileManager) {
     this.session = new CryptoSession();
   }
 
   private buildPacket(type: PacketType, payload: Buffer): Buffer {
     const buf = Buffer.alloc(41 + payload.length);
-    buf.writeUInt32BE(0x41524348, 0);
-    buf.writeUInt8(type, 4);
-    this.nodeId.copy(buf, 5);
-    buf.writeUInt32BE(payload.length, 37);
-    payload.copy(buf, 41);
-    return buf;
+    buf.writeUInt32BE(0x41524348, 0); buf.writeUInt8(type, 4);
+    this.nodeId.copy(buf, 5); buf.writeUInt32BE(payload.length, 37);
+    payload.copy(buf, 41); return buf;
   }
 
   private drawProgressBar(current: number, total: number) {
@@ -59,7 +51,7 @@ export class TcpClient {
     const progress = Math.floor((current / total) * width);
     const bar = "█".repeat(progress) + "░".repeat(width - progress);
     const percent = Math.floor((current / total) * 100);
-    process.stdout.write(`\r[TRANSFERT] [${bar}] ${percent}% (${current}/${total} chunks)`);
+    process.stdout.write(`\r[PROGRESSION] [${bar}] ${percent}% (${current}/${total})`);
   }
 
   private requestNextChunk() {
@@ -75,9 +67,7 @@ export class TcpClient {
       this.socket?.write(this.buildPacket(PacketType.HANDSHAKE, this.session.ephemeralPublicKey));
     });
 
-    this.socket.on('error', (err: any) => {
-      if (err.code !== 'ECONNRESET') console.error(`\n[TCP CLIENT] Erreur : ${err.message}`);
-    });
+    this.socket.on('error', (err: any) => { if (err.code !== 'ECONNRESET') console.error(`\n[CLIENT] Erreur: ${err.message}`); });
 
     const parser = new TcpStreamParser(this.socket);
     parser.on('packet', (packetBuffer: Buffer) => {
@@ -87,7 +77,6 @@ export class TcpClient {
       if (type === PacketType.HANDSHAKE) {
         this.session.deriveSharedSecret(payload);
         if (manifestToShare) {
-          console.log(`[TCP CLIENT] Envoi manifeste (${manifestToShare.fileName})...`);
           const encrypted = this.session.encrypt(Buffer.from(JSON.stringify(manifestToShare)));
           this.socket?.write(this.buildPacket(PacketType.MANIFEST, encrypted));
         }
@@ -95,25 +84,33 @@ export class TcpClient {
       else if (type === PacketType.MANIFEST) {
         try {
           const decrypted = this.session.decrypt(payload);
-          this.currentManifest = JSON.parse(decrypted.toString('utf-8'));
-          this.nextChunkIndex = 0;
-          console.log(`\n[CLIENT] Début téléchargement : ${this.currentManifest?.fileName}`);
-          this.requestNextChunk();
-        } catch (e) { console.error("\n[CLIENT] Erreur lecture manifeste"); }
+          const manifest = JSON.parse(decrypted.toString('utf-8'));
+          
+          if (!this.fileManager.hasFile(manifest.fileHash)) {
+            this.currentManifest = manifest;
+            this.nextChunkIndex = 0;
+            console.log(`\n[CLIENT] Nouveau fichier détecté: ${manifest.fileName}. Téléchargement...`);
+            this.requestNextChunk();
+          }
+        } catch (e) { console.error("\n[CLIENT] Erreur Manifeste"); }
       }
       else if (type === PacketType.CHUNK_DATA) {
         try {
           if (!this.currentManifest) return;
           const chunkData = this.session.decrypt(payload);
           const receivedHash = crypto.createHash('sha256').update(chunkData).digest('hex');
+          
           if (receivedHash === this.currentManifest.chunks[this.nextChunkIndex].hash) {
             this.fileManager.saveChunk(this.currentManifest.fileName, this.nextChunkIndex, chunkData);
             this.nextChunkIndex++;
             this.drawProgressBar(this.nextChunkIndex, this.currentManifest.chunks.length);
+            
+            if (this.nextChunkIndex % 100 === 0) console.log(""); // Flush log pour Windows
+
             if (this.nextChunkIndex < this.currentManifest.chunks.length) this.requestNextChunk();
-            else console.log(`\n✅ TRANSFERT RÉUSSI !`);
+            else console.log(`\n✅ TRANSFERT RÉUSSI: ${this.currentManifest.fileName}`);
           }
-        } catch (e) { console.error("\n[CLIENT] Erreur chunk"); }
+        } catch (e) { console.error("\n[CLIENT] Erreur Chunk"); }
       }
     });
   }

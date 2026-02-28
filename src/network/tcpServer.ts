@@ -1,4 +1,3 @@
-// src/network/tcpServer.ts
 import { EventEmitter } from 'events';
 import net from 'net';
 import { PacketType } from './types';
@@ -34,7 +33,7 @@ export class TcpServer {
     this.server = net.createServer((socket) => this.handleConnection(socket));
   }
   public start() {
-    this.server.listen(this.port, '0.0.0.0', () => console.log(`[TCP SERVER] Port ${this.port}`));
+    this.server.listen(this.port, '0.0.0.0', () => console.log(`[TCP SERVER] Actif sur port ${this.port}`));
   }
   private buildPacket(type: PacketType, payload: Buffer): Buffer {
     const buf = Buffer.alloc(41 + payload.length);
@@ -56,7 +55,7 @@ export class TcpServer {
           const decrypted = session.decrypt(payload);
           const manifest = JSON.parse(decrypted.toString('utf-8'));
           this.fileManager.registerRemoteManifest(manifest);
-          console.log(`[TCP SERVER] Manifeste reçu : ${manifest.fileName}`);
+          console.log(`[TCP SERVER] Manifeste indexé: ${manifest.fileName}`);
         } catch (err) { console.error("[SERVER] Erreur Manifeste"); }
       }
       else if (type === PacketType.CHUNK_REQ) {
