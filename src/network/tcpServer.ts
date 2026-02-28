@@ -36,14 +36,8 @@ export class TcpServer {
     this.server = net.createServer((socket) => this.handleConnection(socket));
   }
 
-  // Permet à l'index de donner le fichier à partager au serveur
-  public setManifest(manifest: FileManifest) {
-    this.manifestToShare = manifest;
-  }
-
-  public start() {
-    this.server.listen(this.port, '0.0.0.0', () => console.log(`[TCP SERVER] Actif sur port ${this.port}`));
-  }
+  public setManifest(manifest: FileManifest) { this.manifestToShare = manifest; }
+  public start() { this.server.listen(this.port, '0.0.0.0'); }
 
   private buildPacket(type: PacketType, payload: Buffer): Buffer {
     const buf = Buffer.alloc(41 + payload.length);
@@ -53,11 +47,8 @@ export class TcpServer {
   }
 
   private handleConnection(socket: net.Socket) {
-    socket.on('error', (err: any) => { if (err.code !== 'ECONNRESET') console.error(err); });
     const parser = new TcpStreamParser(socket);
     const session = new CryptoSession();
-
-    // 1. Handshake initial
     socket.write(this.buildPacket(PacketType.HANDSHAKE, session.ephemeralPublicKey));
 
     parser.on('packet', (packetBuffer: Buffer) => {
@@ -66,33 +57,21 @@ export class TcpServer {
 
       if (type === PacketType.HANDSHAKE) {
         session.deriveSharedSecret(payload);
-        console.log(`[TCP SERVER] Session sécurisée avec un client.`);
-
-        // FORCE L'ENVOI DU MANIFESTE SI ON EN A UN
+        
+        // DÉLAI DE SÉCURITÉ SPRINT 4
         if (this.manifestToShare) {
-          console.log(`[TCP SERVER] Envoi automatique du manifeste : ${this.manifestToShare.fileName}`);
-          const encrypted = session.encrypt(Buffer.from(JSON.stringify(this.manifestToShare)));
-          socket.write(this.buildPacket(PacketType.MANIFEST, encrypted));
+          setTimeout(() => {
+            const encrypted = session.encrypt(Buffer.from(JSON.stringify(this.manifestToShare)));
+            socket.write(this.buildPacket(PacketType.MANIFEST, encrypted));
+          }, 300);
         }
       } 
-      else if (type === PacketType.MANIFEST) {
-        try {
-          const decrypted = session.decrypt(payload);
-          const manifest = JSON.parse(decrypted.toString('utf-8'));
-          this.fileManager.registerRemoteManifest(manifest);
-          console.log(`[TCP SERVER] Manifeste reçu et indexé.`);
-        } catch (err) { console.error("[SERVER] Erreur Manifeste"); }
-      }
       else if (type === PacketType.CHUNK_REQ) {
-        try {
-          const decrypted = session.decrypt(payload);
-          const fileHash = decrypted.subarray(0, 64).toString('utf-8');
-          const chunkIndex = decrypted.readUInt32BE(64);
-          const chunkData = this.fileManager.getChunk(fileHash, chunkIndex);
-          if (chunkData) {
-            socket.write(this.buildPacket(PacketType.CHUNK_DATA, session.encrypt(chunkData)));
-          }
-        } catch (err) { console.error("[SERVER] Erreur CHUNK_REQ"); }
+        const decrypted = session.decrypt(payload);
+        const chunkIndex = decrypted.readUInt32BE(64);
+        const fileHash = decrypted.subarray(0, 64).toString('utf-8');
+        const chunkData = this.fileManager.getChunk(fileHash, chunkIndex);
+        if (chunkData) socket.write(this.buildPacket(PacketType.CHUNK_DATA, session.encrypt(chunkData)));
       }
     });
   }
