@@ -35,7 +35,6 @@ export class TcpServer {
   constructor(private nodeId: Buffer, private port: number, private fileManager: FileManager) {
     this.server = net.createServer((socket) => this.handleConnection(socket));
   }
-
   public setManifest(manifest: FileManifest) { this.manifestToShare = manifest; }
   public start() { this.server.listen(this.port, '0.0.0.0'); }
 
@@ -47,6 +46,9 @@ export class TcpServer {
   }
 
   private handleConnection(socket: net.Socket) {
+    // Évite le crash du serveur si le client se déconnecte brusquement
+    socket.on('error', (err: any) => { }); 
+
     const parser = new TcpStreamParser(socket);
     const session = new CryptoSession();
     socket.write(this.buildPacket(PacketType.HANDSHAKE, session.ephemeralPublicKey));
@@ -57,21 +59,23 @@ export class TcpServer {
 
       if (type === PacketType.HANDSHAKE) {
         session.deriveSharedSecret(payload);
-        
-        // DÉLAI DE SÉCURITÉ SPRINT 4
         if (this.manifestToShare) {
           setTimeout(() => {
             const encrypted = session.encrypt(Buffer.from(JSON.stringify(this.manifestToShare)));
-            socket.write(this.buildPacket(PacketType.MANIFEST, encrypted));
+            if (!socket.destroyed) socket.write(this.buildPacket(PacketType.MANIFEST, encrypted));
           }, 300);
         }
       } 
       else if (type === PacketType.CHUNK_REQ) {
-        const decrypted = session.decrypt(payload);
-        const chunkIndex = decrypted.readUInt32BE(64);
-        const fileHash = decrypted.subarray(0, 64).toString('utf-8');
-        const chunkData = this.fileManager.getChunk(fileHash, chunkIndex);
-        if (chunkData) socket.write(this.buildPacket(PacketType.CHUNK_DATA, session.encrypt(chunkData)));
+        try {
+            const decrypted = session.decrypt(payload);
+            const chunkIndex = decrypted.readUInt32BE(64);
+            const fileHash = decrypted.subarray(0, 64).toString('utf-8');
+            const chunkData = this.fileManager.getChunk(fileHash, chunkIndex);
+            if (chunkData && !socket.destroyed) {
+                socket.write(this.buildPacket(PacketType.CHUNK_DATA, session.encrypt(chunkData)));
+            }
+        } catch (e) { }
       }
     });
   }

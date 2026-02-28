@@ -37,15 +37,8 @@ export class TcpClient {
   private nextChunkIndex: number = 0;
   private remoteNodeId: string = "";
 
-  constructor(
-    private nodeId: Buffer, 
-    private fileManager: FileManager, 
-    private networkDirectory: NetworkDirectory 
-  ) {
+  constructor(private nodeId: Buffer, private fileManager: FileManager, private networkDirectory: NetworkDirectory) {
     this.session = new CryptoSession();
-    if (!this.networkDirectory) {
-      throw new Error("NetworkDirectory est requis pour initialiser TcpClient");
-    }
   }
 
   private buildPacket(type: PacketType, payload: Buffer): Buffer {
@@ -56,16 +49,27 @@ export class TcpClient {
   }
 
   private requestNextChunk() {
-    if (!this.currentManifest || !this.socket) return;
+    if (!this.currentManifest || !this.socket || this.socket.destroyed) return;
     const reqPayload = Buffer.alloc(68);
     Buffer.from(this.currentManifest.fileHash).copy(reqPayload, 0);
     reqPayload.writeUInt32BE(this.nextChunkIndex, 64);
-    this.socket.write(this.buildPacket(PacketType.CHUNK_REQ, this.session.encrypt(reqPayload)));
+    
+    // Protection contre le crash ECONNRESET
+    try {
+        this.socket.write(this.buildPacket(PacketType.CHUNK_REQ, this.session.encrypt(reqPayload)));
+    } catch (e) {
+        console.error("[CLIENT] Impossible d'envoyer la requête, connexion perdue.");
+    }
   }
 
   public connect(ip: string, port: number, manifestToShare: FileManifest | null = null) {
     this.socket = net.createConnection({ host: ip, port: port }, () => {
       this.socket?.write(this.buildPacket(PacketType.HANDSHAKE, this.session.ephemeralPublicKey));
+    });
+
+    // Capture de l'erreur pour éviter le crash du processus
+    this.socket.on('error', (err: any) => {
+      console.log(`\n[CLIENT] Connexion interrompue (${err.code}).`);
     });
 
     const parser = new TcpStreamParser(this.socket);
@@ -101,7 +105,10 @@ export class TcpClient {
           this.nextChunkIndex++;
           const pct = Math.floor((this.nextChunkIndex / this.currentManifest!.chunks.length) * 100);
           process.stdout.write(`\r[TRANSFERT] ${pct}% (${this.nextChunkIndex}/${this.currentManifest!.chunks.length})`);
-          if (this.nextChunkIndex < this.currentManifest!.chunks.length) this.requestNextChunk();
+          if (this.nextChunkIndex < this.currentManifest!.chunks.length) {
+              // Petit délai optionnel pour soulager le réseau mobile
+              setImmediate(() => this.requestNextChunk());
+          }
           else console.log("\n✅ Transfert terminé !");
         } catch (e) { console.error("[CLIENT] Erreur chunk"); }
       }
