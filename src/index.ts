@@ -6,45 +6,38 @@ import { TcpServer } from './network/tcpServer';
 import { FileManager } from './network/fileManager';
 
 const keyFile = path.join(process.cwd(), 'keys', 'node_identity.json');
+const identity = JSON.parse(fs.readFileSync(keyFile, 'utf-8'));
+const nodeId = Buffer.from(identity.ed25519.publicKey, 'hex');
 
-if (!fs.existsSync(keyFile)) {
-    console.error('Clés introuvables ! Lance d\'abord : node src/crypto/generateKeys.js');
+const args = process.argv.slice(2);
+const tcpPort = args.find(arg => !isNaN(parseInt(arg))) ? parseInt(args[0]) : 7777;
+
+const fileManager = new FileManager();
+
+// --- CONFIGURATION DU TEST 50 MO ---
+// 1. Assure-toi que ce fichier existe dans le dossier /shared
+const fileName = 'test_50mb.dat'; 
+const filePath = path.join(process.cwd(), 'shared', fileName);
+
+if (!fs.existsSync(filePath)) {
+    console.error(`❌ ERREUR : Le fichier ${fileName} est introuvable dans /shared !`);
+    console.log(`Conseil : fsutil file createnew shared/${fileName} 52428800`);
     process.exit(1);
 }
 
-const identity = JSON.parse(fs.readFileSync(keyFile, 'utf-8'));
-const nodeId = Buffer.from(identity.ed25519.publicKey, 'hex');
-const nodeIdHex = nodeId.toString('hex').substring(0, 8);
+// 2. Génération du manifeste lourd
+console.log(`[SYSTEM] Indexation du fichier de 50 Mo... (Patientez)`);
+const manifest = fileManager.shareFile(fileName);
 
-const args = process.argv.slice(2);
-const portArg = args.find(arg => !isNaN(parseInt(arg)));
-const tcpPort = portArg ? parseInt(portArg) : 7777;
-
-// 1. Initialisation du Gestionnaire de Fichiers
-const fileManager = new FileManager();
-const testFile = 'test.txt'; 
-
-// 2. Création du dossier shared et du fichier de test s'ils n'existent pas
-const sharedPath = path.join(process.cwd(), 'shared');
-if (!fs.existsSync(sharedPath)) fs.mkdirSync(sharedPath);
-const filePath = path.join(sharedPath, testFile);
-if (!fs.existsSync(filePath)) {
-    fs.writeFileSync(filePath, "Ceci est un test de transfert P2P Archipel !");
+if (manifest) {
+    console.log(`✅ Manifeste généré : ${manifest.chunks.length} morceaux.`);
 }
 
-// 3. Génération du VRAI manifeste
-const manifest = fileManager.shareFile(testFile);
-
-console.log(`\n🚀 Nœud Archipel [ID: ${nodeIdHex}] port ${tcpPort}`);
-
-// 4. Lancement du Serveur TCP (avec le fileManager pour répondre aux CHUNK_REQ)
 const tcpServer = new TcpServer(nodeId, tcpPort, fileManager);
 tcpServer.start();
 
-// 5. Lancement de la Découverte UDP (On lui passe le fileManager ET le manifeste à partager)
-// Note: On modifie légèrement l'appel pour passer le manifeste au Discovery
+// 3. On passe le VRAI manifeste à Discovery pour qu'il le donne aux clients
 const discovery = new Discovery(nodeId, tcpPort, fileManager, manifest);
 discovery.start();
 
-console.log(`--------------------------------------------------`);
-console.log(`Nœud opérationnel. Partage de : ${testFile}\n`);
+console.log(`🚀 Nœud prêt. Partage actif de : ${fileName}`);
