@@ -4,7 +4,6 @@ import { EventEmitter } from 'events';
 import { PacketType } from './types';
 import { CryptoSession } from '../crypto/session';
 import { FileManager } from './fileManager';
-import { FileManifest } from '../models/manifest';
 import { NetworkDirectory } from './networkDirectory';
 
 class TcpStreamParser extends EventEmitter {
@@ -12,31 +11,67 @@ class TcpStreamParser extends EventEmitter {
   private readonly HEADER_SIZE = 41;
   constructor(private socket: net.Socket) {
     super();
-    this.socket.on('data', (chunk) => this.handleData(chunk as Buffer));
-  }
-  private handleData(chunk: Buffer) {
-    this.buffer = Buffer.concat([this.buffer, chunk]);
-    while (this.buffer.length >= this.HEADER_SIZE) {
-      const magic = this.buffer.readUInt32BE(0);
-      if (magic !== 0x41524348) { this.socket.destroy(); return; }
-      const payloadLen = this.buffer.readUInt32BE(37);
-      const totalPacketSize = this.HEADER_SIZE + payloadLen;
-      if (this.buffer.length >= totalPacketSize) {
-        const fullPacket = this.buffer.subarray(0, totalPacketSize);
-        this.buffer = this.buffer.subarray(totalPacketSize);
-        this.emit('packet', fullPacket);
-      } else break;
-    }
+    this.socket.on('data', (chunk) => {
+        this.buffer = Buffer.concat([this.buffer, chunk]);
+        while (this.buffer.length >= this.HEADER_SIZE) {
+            const payloadLen = this.buffer.readUInt32BE(37);
+            if (this.buffer.length >= 41 + payloadLen) {
+                this.emit('packet', this.buffer.subarray(0, 41 + payloadLen));
+                this.buffer = this.buffer.subarray(41 + payloadLen);
+            } else break;
+        }
+    });
   }
 }
 
 export class TcpClient {
   private socket: net.Socket | null = null;
   private session: CryptoSession = new CryptoSession();
-  private currentManifest: FileManifest | null = null;
+  private currentManifest: any = null;
   private nextChunkIndex: number = 0;
 
   constructor(private nodeId: Buffer, private fileManager: FileManager, private networkDirectory: NetworkDirectory) {}
+
+  public connect(ip: string, port: number, manifestToShare: any = null) {
+    this.socket = net.createConnection({ host: ip, port: port }, () => {
+      this.socket?.write(this.buildPacket(PacketType.HANDSHAKE, this.session.ephemeralPublicKey));
+    });
+
+    this.socket.on('error', (err) => console.log(`[TCP] Erreur : ${err.message}`));
+
+    const parser = new TcpStreamParser(this.socket);
+    parser.on('packet', (packetBuffer: Buffer) => {
+      const type = packetBuffer.readUInt8(4);
+      const payload = packetBuffer.subarray(41);
+
+      if (type === PacketType.HANDSHAKE) {
+        this.session.deriveSharedSecret(payload);
+        if (manifestToShare) {
+          const enc = this.session.encrypt(Buffer.from(JSON.stringify(manifestToShare)));
+          this.socket?.write(this.buildPacket(PacketType.MANIFEST, enc));
+        }
+      } 
+      else if (type === PacketType.MANIFEST) {
+        try {
+          const dec = this.session.decrypt(payload);
+          this.currentManifest = JSON.parse(dec.toString());
+          console.log(`[PC3] Manifeste reçu : ${this.currentManifest.fileName}`);
+          this.networkDirectory.updateFile(this.currentManifest, "remote");
+          if (!this.fileManager.hasFile(this.currentManifest.fileHash)) {
+            this.nextChunkIndex = 0;
+            this.requestNextChunk();
+          }
+        } catch (e) {}
+      }
+      else if (type === PacketType.CHUNK_DATA) {
+        const data = this.session.decrypt(payload);
+        this.fileManager.saveChunk(this.currentManifest.fileName, this.nextChunkIndex, data);
+        this.nextChunkIndex++;
+        if (this.nextChunkIndex < this.currentManifest.chunks.length) this.requestNextChunk();
+        else console.log("✅ PC3 TERMINÉ !");
+      }
+    });
+  }
 
   private buildPacket(type: PacketType, payload: Buffer): Buffer {
     const buf = Buffer.alloc(41 + payload.length);
@@ -46,57 +81,9 @@ export class TcpClient {
   }
 
   private requestNextChunk() {
-    if (!this.currentManifest || !this.socket || this.socket.destroyed) return;
-    const reqPayload = Buffer.alloc(68);
-    Buffer.from(this.currentManifest.fileHash).copy(reqPayload, 0);
-    reqPayload.writeUInt32BE(this.nextChunkIndex, 64);
-    try { this.socket.write(this.buildPacket(PacketType.CHUNK_REQ, this.session.encrypt(reqPayload))); } catch (e) {}
-  }
-
-  public connect(ip: string, port: number, manifestToShare: FileManifest | null = null) {
-    console.log(`[URGENT] Tentative de connexion vers ${ip}:${port}...`);
-    this.socket = net.createConnection({ host: ip, port: port }, () => {
-      console.log(`[URGENT] Connecté ! Envoi Handshake...`);
-      this.socket?.write(this.buildPacket(PacketType.HANDSHAKE, this.session.ephemeralPublicKey));
-    });
-
-    this.socket.on('error', (err: any) => console.log(`[URGENT] Erreur : ${err.code}`));
-
-    const parser = new TcpStreamParser(this.socket);
-    parser.on('packet', (packetBuffer: Buffer) => {
-      const type = packetBuffer.readUInt8(4);
-      const payload = packetBuffer.subarray(41, 41 + packetBuffer.readUInt32BE(37));
-
-      if (type === PacketType.HANDSHAKE) {
-        this.session.deriveSharedSecret(payload);
-        console.log(`[URGENT] Canal sécurisé prêt avec ${ip}`);
-        if (manifestToShare) {
-          const encrypted = this.session.encrypt(Buffer.from(JSON.stringify(manifestToShare)));
-          this.socket?.write(this.buildPacket(PacketType.MANIFEST, encrypted));
-        }
-      } 
-      else if (type === PacketType.MANIFEST) {
-        try {
-          const decrypted = this.session.decrypt(payload);
-          this.currentManifest = JSON.parse(decrypted.toString('utf-8'));
-          console.log(`[URGENT] Manifeste reçu : ${this.currentManifest?.fileName}`);
-          this.networkDirectory.updateFile(this.currentManifest!, "remote");
-          if (!this.fileManager.hasFile(this.currentManifest!.fileHash)) {
-            this.nextChunkIndex = 0;
-            this.requestNextChunk();
-          }
-        } catch (e) { console.error("[URGENT] Erreur décodage manifeste"); }
-      }
-      else if (type === PacketType.CHUNK_DATA) {
-        try {
-          const chunkData = this.session.decrypt(payload);
-          this.fileManager.saveChunk(this.currentManifest!.fileName, this.nextChunkIndex, chunkData);
-          this.nextChunkIndex++;
-          if (this.nextChunkIndex % 50 === 0) process.stdout.write(`\r[PC3] Transfert : ${Math.floor((this.nextChunkIndex / this.currentManifest!.chunks.length) * 100)}%`);
-          if (this.nextChunkIndex < this.currentManifest!.chunks.length) this.requestNextChunk();
-          else console.log("\n✅ TERMINÉ SUR PC 3 !");
-        } catch (e) {}
-      }
-    });
+    const p = Buffer.alloc(68);
+    Buffer.from(this.currentManifest.fileHash).copy(p, 0);
+    p.writeUInt32BE(this.nextChunkIndex, 64);
+    this.socket?.write(this.buildPacket(PacketType.CHUNK_REQ, this.session.encrypt(p)));
   }
 }

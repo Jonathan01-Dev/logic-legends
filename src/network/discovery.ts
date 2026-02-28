@@ -3,7 +3,6 @@ import { MULTICAST_IP, MULTICAST_PORT, PacketType } from './types';
 import { PeerTable } from './peerTable';
 import { TcpClient } from './tcpClient';
 import { FileManager } from './fileManager';
-import { FileManifest } from '../models/manifest';
 import { NetworkDirectory } from './networkDirectory';
 
 export class Discovery {
@@ -15,7 +14,7 @@ export class Discovery {
     private tcpPort: number, 
     private fileManager: FileManager, 
     private networkDirectory: NetworkDirectory, 
-    private manifestToShare: FileManifest | null = null
+    private manifestToShare: any = null
   ) {
     this.socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
   }
@@ -30,38 +29,36 @@ export class Discovery {
         const senderId = msg.subarray(5, 37);
         if (senderId.equals(this.nodeId)) return;
 
-        const remoteTcpPort = msg.readUInt16BE(41);
+        const remotePort = msg.readUInt16BE(41);
         const senderIdHex = senderId.toString('hex');
         
-        // Vérification si c'est un nouveau pair
+        console.log(`[UDP] Signal reçu de ${rinfo.address}:${remotePort} (${senderIdHex.substring(0,8)})`);
+
         const isNew = !this.peerTable.getPeers().some(p => p.node_id === senderIdHex);
-        this.peerTable.upsert(senderId, rinfo.address, remoteTcpPort);
+        this.peerTable.upsert(senderId, rinfo.address, remotePort);
 
         if (isNew) {
-          console.log(`[UDP] Nœud distant trouvé : ${rinfo.address}:${remoteTcpPort}. Connexion...`);
-          // On force la connexion pour récupérer le manifeste
+          console.log(`[URGENT] Nouvelle connexion vers ${rinfo.address}`);
           const client = new TcpClient(this.nodeId, this.fileManager, this.networkDirectory);
-          client.connect(rinfo.address, remoteTcpPort, this.manifestToShare);
+          client.connect(rinfo.address, remotePort, this.manifestToShare);
         }
       }
     });
 
     this.socket.bind(MULTICAST_PORT, '0.0.0.0', () => {
-      this.socket.setBroadcast(true);
-      try { this.socket.addMembership(MULTICAST_IP); } catch (e) { }
+      this.socket.setBroadcast(true); // Autorise l'envoi vers 255.255.255.255
+      console.log(`[UDP] Recherche de pairs active...`);
       
-      this.sendHello();
-      setInterval(() => this.sendHello(), 5000); // HELLO plus fréquent pour le test
+      setInterval(() => {
+        const buf = Buffer.alloc(43);
+        buf.writeUInt32BE(0x41524348, 0);
+        buf.writeUInt8(PacketType.HELLO, 4);
+        this.nodeId.copy(buf, 5);
+        buf.writeUInt32BE(2, 37);
+        buf.writeUInt16BE(this.tcpPort, 41);
+        
+        this.socket.send(buf, MULTICAST_PORT, MULTICAST_IP);
+      }, 5000);
     });
-  }
-
-  private sendHello() {
-    const buf = Buffer.alloc(43);
-    buf.writeUInt32BE(0x41524348, 0);
-    buf.writeUInt8(PacketType.HELLO, 4);
-    this.nodeId.copy(buf, 5);
-    buf.writeUInt32BE(2, 37);
-    buf.writeUInt16BE(this.tcpPort, 41);
-    this.socket.send(buf, MULTICAST_PORT, MULTICAST_IP);
   }
 }
