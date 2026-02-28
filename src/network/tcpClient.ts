@@ -60,91 +60,61 @@ export class TcpClient {
 
   private requestNextChunk() {
     if (!this.currentManifest || !this.socket) return;
-
     const reqPayload = Buffer.alloc(68); 
     Buffer.from(this.currentManifest.fileHash).copy(reqPayload, 0);
     reqPayload.writeUInt32BE(this.nextChunkIndex, 64);
-    
-    const encryptedReq = this.session.encrypt(reqPayload);
-    this.socket.write(this.buildPacket(PacketType.CHUNK_REQ, encryptedReq));
+    this.socket.write(this.buildPacket(PacketType.CHUNK_REQ, this.session.encrypt(reqPayload)));
   }
 
   public connect(ip: string, port: number, manifestToShare: FileManifest | null = null) {
-    console.log(`[TCP CLIENT] Connexion à ${ip}:${port}...`);
-    
     this.socket = net.createConnection({ host: ip, port: port }, () => {
       this.socket?.write(this.buildPacket(PacketType.HANDSHAKE, this.session.ephemeralPublicKey));
     });
 
-    // ÉCOUTEUR D'ERREUR CRITIQUE : Empêche le crash ECONNRESET
     this.socket.on('error', (err: any) => {
-      if (err.code === 'ECONNRESET') {
-        console.warn(`[TCP CLIENT] Connexion réinitialisée par le pair (${ip}). Simulation déconnexion S3.`);
-      } else {
-        console.error(`[TCP CLIENT] Erreur socket : ${err.message}`);
-      }
+      if (err.code !== 'ECONNRESET') console.error(`[TCP CLIENT] Erreur : ${err.message}`);
     });
 
     const parser = new TcpStreamParser(this.socket);
-
     parser.on('packet', (packetBuffer: Buffer) => {
       const type = packetBuffer.readUInt8(4);
       const payload = packetBuffer.subarray(41, 41 + packetBuffer.readUInt32BE(37));
 
       if (type === PacketType.HANDSHAKE) {
         this.session.deriveSharedSecret(payload);
-        console.log(`[TCP CLIENT] Canal sécurisé OK.`);
-        
         if (manifestToShare) {
-          console.log(`[TCP CLIENT] Envoi de notre manifeste (${manifestToShare.fileName})...`);
+          // LOG CRITIQUE S3 : On vérifie si l'envoi démarre
+          console.log(`[TCP CLIENT] Début de l'envoi du manifeste (${manifestToShare.fileName})...`);
           const encryptedManifest = this.session.encrypt(Buffer.from(JSON.stringify(manifestToShare)));
-          this.socket?.write(this.buildPacket(PacketType.MANIFEST, encryptedManifest));
+          
+          this.socket?.write(this.buildPacket(PacketType.MANIFEST, encryptedManifest), () => {
+             // CALLBACK : S'exécute quand le buffer est vidé
+             console.log(`[TCP CLIENT] ENVOI DU MANIFESTE TERMINÉ ✅`);
+          });
         }
       } 
       else if (type === PacketType.MANIFEST) {
         try {
-          console.log(`[CLIENT] Manifeste reçu ! Déchiffrement...`);
           const decrypted = this.session.decrypt(payload);
           this.currentManifest = JSON.parse(decrypted.toString('utf-8'));
           this.nextChunkIndex = 0;
-          
-          console.log(`[CLIENT] Début du transfert : ${this.currentManifest?.chunks.length} chunks à récupérer.`);
+          console.log(`[CLIENT] Manifeste reçu : ${this.currentManifest?.chunks.length} chunks.`);
           this.requestNextChunk();
-        } catch (e) {
-          console.error("[CLIENT] Échec déchiffrement/lecture du manifeste. Trop gros ?");
-        }
+        } catch (e) { console.error("[CLIENT] Erreur lecture manifeste."); }
       }
       else if (type === PacketType.CHUNK_DATA) {
         try {
-          if (!this.currentManifest) return;
           const chunkData = this.session.decrypt(payload);
-          
           const receivedHash = crypto.createHash('sha256').update(chunkData).digest('hex');
-          const expectedHash = this.currentManifest.chunks[this.nextChunkIndex].hash;
-
-          if (receivedHash === expectedHash) {
-            this.fileManager.saveChunk(this.currentManifest.fileName, this.nextChunkIndex, chunkData);
-            
-            if (this.nextChunkIndex % 50 === 0 || this.nextChunkIndex === this.currentManifest.chunks.length - 1) {
-              console.log(`[PROGRESS] Chunk ${this.nextChunkIndex + 1}/${this.currentManifest.chunks.length} reçu.`);
-            }
-
+          if (receivedHash === this.currentManifest!.chunks[this.nextChunkIndex].hash) {
+            this.fileManager.saveChunk(this.currentManifest!.fileName, this.nextChunkIndex, chunkData);
+            if (this.nextChunkIndex % 100 === 0) console.log(`[PROGRESS] Chunk ${this.nextChunkIndex} OK`);
             this.nextChunkIndex++;
-            if (this.nextChunkIndex < this.currentManifest.chunks.length) {
-              this.requestNextChunk();
-            } else {
-              console.log(`✅ FICHIER ENTIÈREMENT REÇU ET VÉRIFIÉ !`);
-            }
-          } else {
-            console.error(`❌ Erreur SHA-256 sur chunk ${this.nextChunkIndex}`);
-            this.socket?.destroy();
+            if (this.nextChunkIndex < this.currentManifest!.chunks.length) this.requestNextChunk();
+            else console.log(`✅ TRANSFERT RÉUSSI !`);
           }
-        } catch (e) { console.error("[CLIENT] Erreur chunk data."); }
+        } catch (e) { console.error("[CLIENT] Erreur chunk."); }
       }
-    });
-
-    this.socket.on('close', () => {
-      console.log(`[TCP CLIENT] Connexion fermée.`);
     });
   }
 }
