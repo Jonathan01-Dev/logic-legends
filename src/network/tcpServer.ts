@@ -63,7 +63,7 @@ export class TcpServer {
               const encrypted = session.encrypt(Buffer.from(JSON.stringify(this.manifestToShare)));
               socket.write(this.buildPacket(PacketType.MANIFEST, encrypted));
             }
-          }, 500);
+          }, 300);
         }
       } 
       else if (type === PacketType.CHUNK_REQ) {
@@ -75,7 +75,7 @@ export class TcpServer {
           if (chunkData && !socket.destroyed) {
             socket.write(this.buildPacket(PacketType.CHUNK_DATA, session.encrypt(chunkData)));
           }
-        } catch (e) {}
+        } catch (e) { }
       }
     });
   }

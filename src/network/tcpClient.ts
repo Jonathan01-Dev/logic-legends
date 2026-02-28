@@ -54,9 +54,13 @@ export class TcpClient {
   }
 
   public connect(ip: string, port: number, manifestToShare: FileManifest | null = null) {
+    console.log(`[URGENT] Tentative de connexion vers ${ip}:${port}...`);
     this.socket = net.createConnection({ host: ip, port: port }, () => {
+      console.log(`[URGENT] Connecté ! Envoi Handshake...`);
       this.socket?.write(this.buildPacket(PacketType.HANDSHAKE, this.session.ephemeralPublicKey));
     });
+
+    this.socket.on('error', (err: any) => console.log(`[URGENT] Erreur : ${err.code}`));
 
     const parser = new TcpStreamParser(this.socket);
     parser.on('packet', (packetBuffer: Buffer) => {
@@ -65,6 +69,7 @@ export class TcpClient {
 
       if (type === PacketType.HANDSHAKE) {
         this.session.deriveSharedSecret(payload);
+        console.log(`[URGENT] Canal sécurisé prêt avec ${ip}`);
         if (manifestToShare) {
           const encrypted = this.session.encrypt(Buffer.from(JSON.stringify(manifestToShare)));
           this.socket?.write(this.buildPacket(PacketType.MANIFEST, encrypted));
@@ -74,22 +79,22 @@ export class TcpClient {
         try {
           const decrypted = this.session.decrypt(payload);
           this.currentManifest = JSON.parse(decrypted.toString('utf-8'));
-          console.log(`[CLIENT] Manifeste reçu : ${this.currentManifest?.fileName}`);
+          console.log(`[URGENT] Manifeste reçu : ${this.currentManifest?.fileName}`);
           this.networkDirectory.updateFile(this.currentManifest!, "remote");
           if (!this.fileManager.hasFile(this.currentManifest!.fileHash)) {
             this.nextChunkIndex = 0;
             this.requestNextChunk();
           }
-        } catch (e) {}
+        } catch (e) { console.error("[URGENT] Erreur décodage manifeste"); }
       }
       else if (type === PacketType.CHUNK_DATA) {
         try {
           const chunkData = this.session.decrypt(payload);
           this.fileManager.saveChunk(this.currentManifest!.fileName, this.nextChunkIndex, chunkData);
           this.nextChunkIndex++;
-          if (this.nextChunkIndex % 50 === 0) process.stdout.write(`\r[TRANSFERT PC3] ${Math.floor((this.nextChunkIndex / this.currentManifest!.chunks.length) * 100)}%`);
+          if (this.nextChunkIndex % 50 === 0) process.stdout.write(`\r[PC3] Transfert : ${Math.floor((this.nextChunkIndex / this.currentManifest!.chunks.length) * 100)}%`);
           if (this.nextChunkIndex < this.currentManifest!.chunks.length) this.requestNextChunk();
-          else console.log("\n✅ PC 3 a fini !");
+          else console.log("\n✅ TERMINÉ SUR PC 3 !");
         } catch (e) {}
       }
     });
