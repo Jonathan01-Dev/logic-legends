@@ -20,26 +20,31 @@ const args = process.argv.slice(2);
 const portArg = args.find(arg => !isNaN(parseInt(arg)));
 const tcpPort = portArg ? parseInt(portArg) : 7777;
 
-// --- INITIALISATION DU SPRINT 3 ---
+// 1. Initialisation du Gestionnaire de Fichiers
 const fileManager = new FileManager();
-const testFile = 'test.txt';
+const testFile = 'test.txt'; 
 
-// On prépare le fichier pour le partage (Génération du Manifeste)
+// 2. Création du dossier shared et du fichier de test s'ils n'existent pas
+const sharedPath = path.join(process.cwd(), 'shared');
+if (!fs.existsSync(sharedPath)) fs.mkdirSync(sharedPath);
+const filePath = path.join(sharedPath, testFile);
+if (!fs.existsSync(filePath)) {
+    fs.writeFileSync(filePath, "Ceci est un test de transfert P2P Archipel !");
+}
+
+// 3. Génération du VRAI manifeste
 const manifest = fileManager.shareFile(testFile);
 
-console.log(`\n🚀 Nœud Archipel [ID: ${nodeIdHex}] sur le port ${tcpPort}`);
-console.log(`--------------------------------------------------`);
+console.log(`\n🚀 Nœud Archipel [ID: ${nodeIdHex}] port ${tcpPort}`);
 
-// Lancement du Serveur TCP avec le nodeId
-const tcpServer = new TcpServer(nodeId, tcpPort);
+// 4. Lancement du Serveur TCP (avec le fileManager pour répondre aux CHUNK_REQ)
+const tcpServer = new TcpServer(nodeId, tcpPort, fileManager);
 tcpServer.start();
 
-// Lancement de la Découverte UDP
-const discovery = new Discovery(nodeId, tcpPort);
+// 5. Lancement de la Découverte UDP (On lui passe le fileManager ET le manifeste à partager)
+// Note: On modifie légèrement l'appel pour passer le manifeste au Discovery
+const discovery = new Discovery(nodeId, tcpPort, fileManager, manifest);
 discovery.start();
 
 console.log(`--------------------------------------------------`);
-if (manifest) {
-    console.log(`📄 Fichier partagé : ${testFile} (${manifest.fileHash.substring(0,12)}...)`);
-}
-console.log(`Nœud opérationnel. En attente de pairs...\n`);
+console.log(`Nœud opérationnel. Partage de : ${testFile}\n`);
