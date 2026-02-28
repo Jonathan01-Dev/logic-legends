@@ -1,7 +1,26 @@
 import net from 'net';
+import { EventEmitter } from 'events';
 import { PacketType } from './types';
 import { CryptoSession } from '../crypto/session';
 import { FileManager } from './fileManager';
+
+class TcpStreamParser extends EventEmitter {
+  private buffer: Buffer = Buffer.alloc(0);
+  private readonly HEADER_SIZE = 41;
+  constructor(private socket: net.Socket) {
+    super();
+    this.socket.on('data', (chunk: Buffer) => {
+      this.buffer = Buffer.concat([this.buffer, chunk]);
+      while (this.buffer.length >= this.HEADER_SIZE) {
+        const payloadLen = this.buffer.readUInt32BE(37);
+        if (this.buffer.length >= 41 + payloadLen) {
+          this.emit('packet', this.buffer.subarray(0, 41 + payloadLen));
+          this.buffer = this.buffer.subarray(41 + payloadLen);
+        } else break;
+      }
+    });
+  }
+}
 
 export class TcpServer {
   private server: net.Server;
@@ -10,16 +29,16 @@ export class TcpServer {
   constructor(private nodeId: Buffer, private port: number, private fileManager: FileManager) {
     this.server = net.createServer((socket) => {
       const session = new CryptoSession();
-      socket.on('error', () => socket.destroy());
+      socket.on('error', () => {});
 
-      const h = this.buildPacket(PacketType.HANDSHAKE, session.ephemeralPublicKey);
-      socket.write(h);
+      // Handshake initial
+      socket.write(this.buildPacket(PacketType.HANDSHAKE, session.ephemeralPublicKey));
 
-      socket.on('data', (data) => {
+      const parser = new TcpStreamParser(socket);
+      parser.on('packet', (packetBuffer: Buffer) => {
         try {
-          if (data.length < 41) return;
-          const type = data.readUInt8(4);
-          const payload = data.subarray(41);
+          const type = packetBuffer.readUInt8(4);
+          const payload = packetBuffer.subarray(41);
 
           if (type === PacketType.HANDSHAKE) {
             session.deriveSharedSecret(payload);
@@ -28,11 +47,11 @@ export class TcpServer {
               socket.write(this.buildPacket(PacketType.MANIFEST, enc));
             }
           } 
-          // NOUVEAU : Réception d'un message chiffré 
+          // RÉCEPTION DU MESSAGE ICI [cite: 205-225]
           else if (type === PacketType.MSG) {
             const decMsg = session.decrypt(payload);
             console.log(`\n💬 [MESSAGE SÉCURISÉ] : ${decMsg.toString('utf-8')}`);
-            process.stdout.write('archipel> '); // Remet le prompt propre
+            process.stdout.write('archipel> '); // Remet le prompt proprement
           }
           else if (type === PacketType.CHUNK_REQ) {
             const dec = session.decrypt(payload);
@@ -48,12 +67,12 @@ export class TcpServer {
               socket.write(this.buildPacket(PacketType.CHUNK_DATA, session.encrypt(chunk)));
             }
           }
-        } catch (e: any) {}
+        } catch (e) {}
       });
     });
   }
 
-  private buildPacket(type: PacketType, payload: Buffer): Buffer {
+  private buildPacket(type: number, payload: Buffer): Buffer {
     const buf = Buffer.alloc(41 + payload.length);
     buf.writeUInt32BE(0x41524348, 0); buf.writeUInt8(type, 4);
     this.nodeId.copy(buf, 5); buf.writeUInt32BE(payload.length, 37);

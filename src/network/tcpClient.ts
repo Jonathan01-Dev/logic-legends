@@ -33,7 +33,6 @@ export class TcpClient {
 
   constructor(private nodeId: Buffer, private fm: FileManager, private nd: NetworkDirectory) {}
 
-  // Ajout du paramètre messageToSend
   public connect(ip: string, port: number, manifestToShare: any = null, autoDownload: boolean = false, messageToSend: string | null = null) {
     this.socket = net.createConnection({ host: ip, port: port }, () => {
       this.socket?.write(this.buildPacket(PacketType.HANDSHAKE, this.session.ephemeralPublicKey));
@@ -51,13 +50,16 @@ export class TcpClient {
         this.remoteNodeId = senderId;
         this.session.deriveSharedSecret(payload);
         
-        // NOUVEAU : Envoi du message chiffré si demandé
+        // Envoi du message chiffré avec fermeture douce
         if (messageToSend) {
           const encMsg = this.session.encrypt(Buffer.from(messageToSend));
-          // S'assurer que PacketType.MSG = 0x03 dans types.ts
-          this.socket?.write(this.buildPacket(3, encMsg)); 
+          this.socket?.write(this.buildPacket(PacketType.MSG, encMsg)); 
           console.log(`✅ Message chiffré envoyé avec succès !`);
-          this.socket?.destroy(); // On ferme la connexion après l'envoi
+          
+          // DÉLAI DE SÉCURITÉ : Laisse 500ms au paquet pour voyager avant de fermer
+          setTimeout(() => {
+            this.socket?.end(); 
+          }, 500);
           return;
         }
 
@@ -91,7 +93,7 @@ export class TcpClient {
           if (this.chunkIdx < this.manifest.chunks.length) {
             this.request();
           } else {
-            console.log(`\n✅ Fichier synchronisé avec succès ! Tapez 'archipel>' pour continuer.`);
+            console.log(`\n✅ Fichier synchronisé avec succès !`);
           }
         } catch (e) {}
       }
