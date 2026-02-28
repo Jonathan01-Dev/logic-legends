@@ -1,8 +1,8 @@
 // src/network/types.ts
 
-export const MULTICAST_IP = '239.255.42.99'; // [cite: 118]
-export const MULTICAST_PORT = 6000;          // [cite: 118]
-export const DEFAULT_TCP_PORT = 7777;        // [cite: 151]
+export const MULTICAST_IP = '255.255.255.255'; // CHANGEMENT CRITIQUE : BROADCAST ABSOLU
+export const MULTICAST_PORT = 6000;          
+export const DEFAULT_TCP_PORT = 7777;
 
 export enum PacketType {
   HELLO = 0x01,       // annonce de présence sur le réseau [cite: 87]
