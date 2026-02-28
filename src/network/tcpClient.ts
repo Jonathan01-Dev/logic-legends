@@ -51,6 +51,8 @@ export class TcpClient {
       if (type === PacketType.HANDSHAKE) {
         this.remoteNodeId = senderId;
         this.session.deriveSharedSecret(payload);
+        
+        // Suppression du spam crypto ici
         if (manifestToShare) {
           const enc = this.session.encrypt(Buffer.from(JSON.stringify(manifestToShare)));
           this.socket?.write(this.buildPacket(PacketType.MANIFEST, enc));
@@ -84,7 +86,7 @@ export class TcpClient {
           if (this.chunkIdx < this.manifest.chunks.length) {
             this.request();
           } else {
-            console.log(`\n✅ Fichier synchronisé avec succès ! Tapez 'archipel>' pour continuer.`);
+            console.log(`\n✅ Fichier synchronisé avec succès !`);
           }
         } catch (e) {}
       }
@@ -109,4 +111,3 @@ export class TcpClient {
     this.socket?.write(this.buildPacket(PacketType.CHUNK_REQ, this.session.encrypt(p)));
   }
 }
-// FIN DU FICHIER - ASSURE-TOI D'AVOIR COPIÉ JUSQU'ICI

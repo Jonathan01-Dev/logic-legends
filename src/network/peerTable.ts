@@ -1,6 +1,5 @@
-// src/network/peerTable.ts
 export interface Peer {
-  node_id: string; // Hex string de la clé publique
+  node_id: string;
   ip: string;
   tcp_port: number;
   last_seen: number;
@@ -9,35 +8,25 @@ export interface Peer {
 export class PeerTable {
   private peers: Map<string, Peer> = new Map();
 
-  public upsert(nodeId: Buffer, ip: string, tcpPort: number) {
-    const idHex = nodeId.toString('hex');
-    this.peers.set(idHex, {
-      node_id: idHex,
+  public upsert(nodeId: Buffer, ip: string, port: number) {
+    const idStr = nodeId.toString('hex');
+    this.peers.set(idStr, {
+      node_id: idStr,
       ip: ip,
-      tcp_port: tcpPort,
+      tcp_port: port,
       last_seen: Date.now()
     });
-    this.printTable();
+    // Les console.log() ont été supprimés ici pour garantir un CLI propre
   }
 
   public getPeers(): Peer[] {
-    return Array.from(this.peers.values());
-  }
-
-  public purgeDeadNodes() {
     const now = Date.now();
     for (const [id, peer] of this.peers.entries()) {
-      // Timeout: nœud considéré mort après 90 secondes 
+      // Timeout de 90 secondes selon le cahier des charges
       if (now - peer.last_seen > 90000) {
         this.peers.delete(id);
-        console.log(`[PEER TABLE] Nœud ${id.substring(0, 8)} supprimé (Timeout)`);
       }
     }
-  }
-
-  private printTable() {
-    console.log(`\n--- PEER TABLE ACTIVE ---`);
-    this.peers.forEach(p => console.log(`- ID: ${p.node_id.substring(0, 8)} | IP: ${p.ip}:${p.tcp_port}`));
-    console.log(`-------------------------\n`);
+    return Array.from(this.peers.values());
   }
 }
