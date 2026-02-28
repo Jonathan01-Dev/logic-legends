@@ -38,7 +38,7 @@ export class TcpClient {
   private remoteNodeId: string = "";
 
   constructor(private nodeId: Buffer, private fileManager: FileManager, private networkDirectory: NetworkDirectory) {
-    if (!this.networkDirectory) throw new Error("NetworkDirectory manquant");
+    if (!this.networkDirectory) throw new Error("NetworkDirectory requis");
   }
 
   private buildPacket(type: PacketType, payload: Buffer): Buffer {
@@ -83,7 +83,6 @@ export class TcpClient {
         try {
           const decrypted = this.session.decrypt(payload);
           const manifest = JSON.parse(decrypted.toString('utf-8'));
-          console.log(`[CLIENT] Manifeste reçu : ${manifest.fileName}`);
           this.networkDirectory.updateFile(manifest, this.remoteNodeId);
           if (!this.fileManager.hasFile(manifest.fileHash)) {
             this.currentManifest = manifest;
@@ -97,12 +96,12 @@ export class TcpClient {
           const chunkData = this.session.decrypt(payload);
           this.fileManager.saveChunk(this.currentManifest!.fileName, this.nextChunkIndex, chunkData);
           this.nextChunkIndex++;
-          if (this.nextChunkIndex % 50 === 0) {
+          if (this.nextChunkIndex % 50 === 0 || this.nextChunkIndex === this.currentManifest!.chunks.length) {
               const pct = Math.floor((this.nextChunkIndex / this.currentManifest!.chunks.length) * 100);
               process.stdout.write(`\r[TRANSFERT] ${pct}%`);
           }
           if (this.nextChunkIndex < this.currentManifest!.chunks.length) this.requestNextChunk();
-          else console.log("\n✅ Reçu sur PC 3 !");
+          else console.log("\n✅ Reçu sur ce nœud !");
         } catch (e) {}
       }
     });
