@@ -4,7 +4,6 @@ import { EventEmitter } from 'events';
 import { PacketType } from './types';
 import { CryptoSession } from '../crypto/session';
 
-/** Parseur TLV intégré pour la réception client */
 class TcpStreamParser extends EventEmitter {
   private buffer: Buffer = Buffer.alloc(0);
   private readonly HEADER_SIZE = 41;
@@ -42,16 +41,27 @@ export class TcpClient {
 
   constructor(nodeId: Buffer) {
     this.nodeId = nodeId;
-    this.session = new CryptoSession(); // Nouvelle session par connexion
+    this.session = new CryptoSession();
   }
 
   private buildHandshakePacket(ephemeralKey: Buffer): Buffer {
     const buf = Buffer.alloc(41 + 32);
     buf.writeUInt32BE(0x41524348, 0);       // MAGIC
-    buf.writeUInt8(PacketType.HANDSHAKE, 4); // TYPE
+    buf.writeUInt8(PacketType.HANDSHAKE, 4); // TYPE 0x08
     this.nodeId.copy(buf, 5);               // NODE_ID
     buf.writeUInt32BE(32, 37);              // PAYLOAD_LEN
     ephemeralKey.copy(buf, 41);             // CLÉ X25519
+    return buf;
+  }
+
+  // NOUVEAU : Fonction pour forger un paquet MSG chiffré
+  private buildMsgPacket(encryptedPayload: Buffer): Buffer {
+    const buf = Buffer.alloc(41 + encryptedPayload.length);
+    buf.writeUInt32BE(0x41524348, 0);       // MAGIC
+    buf.writeUInt8(PacketType.MSG, 4);      // TYPE 0x03
+    this.nodeId.copy(buf, 5);               // NODE_ID
+    buf.writeUInt32BE(encryptedPayload.length, 37); // PAYLOAD_LEN
+    encryptedPayload.copy(buf, 41);         // PAYLOAD CHIFFRÉ
     return buf;
   }
 
@@ -75,7 +85,13 @@ export class TcpClient {
         console.log(`[TCP CLIENT] Handshake reçu de ${ip}. Calcul du secret AES...`);
         this.session.deriveSharedSecret(payload);
         
-        // TODO plus tard : On pourra envoyer notre premier MSG chiffré ici !
+        // --- LE TEST DU FEU : ENVOI D'UN MESSAGE CHIFFRÉ ---
+        const testMessage = "Salut Archipel ! Ceci est un message top secret chiffré en AES-256-GCM.";
+        const encryptedMsg = this.session.encrypt(Buffer.from(testMessage, 'utf-8'));
+        const msgPacket = this.buildMsgPacket(encryptedMsg);
+        
+        this.socket?.write(msgPacket);
+        console.log(`[TCP CLIENT] Message de test chiffré et envoyé avec succès !`);
       } 
       else if (type === PacketType.MSG) {
         try {
@@ -88,7 +104,6 @@ export class TcpClient {
     });
 
     this.socket.on('error', (err) => {
-      // On ignore les erreurs de connexion refusée (quand l'autre nœud n'est pas encore prêt)
       if (err.message.includes('ECONNREFUSED')) return;
       console.error(`[TCP CLIENT] Erreur : ${err.message}`);
     });
