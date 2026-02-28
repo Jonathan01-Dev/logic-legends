@@ -61,6 +61,10 @@ export class TcpServer {
   }
 
   private handleConnection(socket: net.Socket) {
+    socket.on('error', (err) => {
+      console.log(`[TCP SERVER] Connexion perdue avec un pair (Normal en simulation S3)`);
+    });
+
     const parser = new TcpStreamParser(socket);
     const session = new CryptoSession();
 
@@ -73,7 +77,7 @@ export class TcpServer {
 
       if (type === PacketType.HANDSHAKE) {
         session.deriveSharedSecret(payload);
-      } 
+      }
       else if (type === PacketType.MANIFEST) {
         try {
           const decrypted = session.decrypt(payload); //
