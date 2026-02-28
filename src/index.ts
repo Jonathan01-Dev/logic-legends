@@ -4,7 +4,7 @@ import { Discovery } from './network/discovery';
 import { TcpServer } from './network/tcpServer';
 import { FileManager } from './network/fileManager';
 import { NetworkDirectory } from './network/networkDirectory';
-import { CLI } from './cli'; // Import du nouveau module
+import { CLI } from './cli';
 
 async function main() {
   try {
@@ -14,8 +14,6 @@ async function main() {
 
     const args = process.argv.slice(2);
     const tcpPort = args.find(a => !a.startsWith('--')) ? parseInt(args.find(a => !a.startsWith('--')) as string) : 7777;
-    
-    // Détection du flag --no-ai imposé par le hackathon 
     const aiEnabled = !args.includes('--no-ai');
 
     const fileManager = new FileManager();
@@ -32,14 +30,14 @@ async function main() {
       if (localManifest) networkDirectory.updateFile(localManifest, nodeId.toString('hex'));
     }
 
-    const tcpServer = new TcpServer(nodeId, tcpPort, fileManager);
+    // MISE À JOUR : On passe le networkDirectory au serveur
+    const tcpServer = new TcpServer(nodeId, tcpPort, fileManager, networkDirectory);
     if (localManifest) tcpServer.setManifest(localManifest);
     tcpServer.start();
 
     const discovery = new Discovery(nodeId, tcpPort, fileManager, networkDirectory, localManifest);
     discovery.start();
 
-    // Démarrage de l'interface de commande
     const cli = new CLI(nodeId.toString('hex'), tcpPort, discovery, fileManager, networkDirectory, aiEnabled);
     cli.start();
 

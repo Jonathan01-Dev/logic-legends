@@ -3,6 +3,7 @@ import { EventEmitter } from 'events';
 import { PacketType } from './types';
 import { CryptoSession } from '../crypto/session';
 import { FileManager } from './fileManager';
+import { NetworkDirectory } from './networkDirectory';
 
 class TcpStreamParser extends EventEmitter {
   private buffer: Buffer = Buffer.alloc(0);
@@ -26,18 +27,19 @@ export class TcpServer {
   private server: net.Server;
   private manifestToShare: any = null;
 
-  constructor(private nodeId: Buffer, private port: number, private fileManager: FileManager) {
+  // NOUVEAU : On importe le NetworkDirectory pour indexer les fichiers reçus
+  constructor(private nodeId: Buffer, private port: number, private fileManager: FileManager, private nd: NetworkDirectory) {
     this.server = net.createServer((socket) => {
       const session = new CryptoSession();
       socket.on('error', () => {});
 
-      // Handshake initial
       socket.write(this.buildPacket(PacketType.HANDSHAKE, session.ephemeralPublicKey));
 
       const parser = new TcpStreamParser(socket);
       parser.on('packet', (packetBuffer: Buffer) => {
         try {
           const type = packetBuffer.readUInt8(4);
+          const senderIdHex = packetBuffer.subarray(5, 37).toString('hex');
           const payload = packetBuffer.subarray(41);
 
           if (type === PacketType.HANDSHAKE) {
@@ -47,11 +49,18 @@ export class TcpServer {
               socket.write(this.buildPacket(PacketType.MANIFEST, enc));
             }
           } 
-          // RÉCEPTION DU MESSAGE ICI [cite: 205-225]
           else if (type === PacketType.MSG) {
             const decMsg = session.decrypt(payload);
             console.log(`\n💬 [MESSAGE SÉCURISÉ] : ${decMsg.toString('utf-8')}`);
-            process.stdout.write('archipel> '); // Remet le prompt proprement
+            process.stdout.write('archipel> '); 
+          }
+          // NOUVEAU : Si un pair nous pousse un fichier via la commande 'send'
+          else if (type === PacketType.MANIFEST) {
+            const dec = session.decrypt(payload);
+            const incomingManifest = JSON.parse(dec.toString());
+            this.nd.updateFile(incomingManifest, senderIdHex);
+            console.log(`\n📥 [RÉCEPTION] Un pair vient de vous pousser le fichier : ${incomingManifest.fileName}. Tapez 'download ${incomingManifest.fileName}' pour l'accepter.`);
+            process.stdout.write('archipel> '); 
           }
           else if (type === PacketType.CHUNK_REQ) {
             const dec = session.decrypt(payload);
