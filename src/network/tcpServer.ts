@@ -27,31 +27,28 @@ export class TcpServer {
               const enc = session.encrypt(Buffer.from(JSON.stringify(this.manifestToShare)));
               socket.write(this.buildPacket(PacketType.MANIFEST, enc));
             }
-          } else if (type === PacketType.CHUNK_REQ) {
+          } 
+          // NOUVEAU : Réception d'un message chiffré 
+          else if (type === PacketType.MSG) {
+            const decMsg = session.decrypt(payload);
+            console.log(`\n💬 [MESSAGE SÉCURISÉ] : ${decMsg.toString('utf-8')}`);
+            process.stdout.write('archipel> '); // Remet le prompt propre
+          }
+          else if (type === PacketType.CHUNK_REQ) {
             const dec = session.decrypt(payload);
             const idx = dec.readUInt32BE(64);
             const hash = dec.subarray(0, 64).toString('utf-8').replace(/\0/g, '').trim();
             
-            console.log(`\n[TCP SERVER] 🔍 PC 2 demande le chunk ${idx} du fichier [${hash.substring(0,10)}...]`);
-            
-            // Tentative 1 : Chercher par Hash
             let chunk = this.fileManager.getChunk(hash, idx);
-            
-            // Tentative 2 (Hack de Survie) : Chercher par Nom de Fichier (si getChunk utilise le nom)
             if (!chunk && this.manifestToShare && this.manifestToShare.fileName) {
                chunk = this.fileManager.getChunk(this.manifestToShare.fileName, idx);
             }
 
             if (chunk && !socket.destroyed) {
-              console.log(`[TCP SERVER] 📤 Envoi du chunk ${idx} de ${(chunk.length / 1024).toFixed(1)} KB réussi !`);
               socket.write(this.buildPacket(PacketType.CHUNK_DATA, session.encrypt(chunk)));
-            } else {
-              console.log(`[TCP SERVER] ❌ ERREUR CRITIQUE: Chunk ${idx} introuvable en mémoire.`);
             }
           }
-        } catch (e: any) {
-           console.log(`[TCP SERVER] ❌ ERREUR de lecture: ${e.message}`);
-        }
+        } catch (e: any) {}
       });
     });
   }

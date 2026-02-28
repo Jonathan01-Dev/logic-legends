@@ -18,9 +18,7 @@ class TcpStreamParser extends EventEmitter {
         if (this.buffer.length >= 41 + payloadLen) {
           this.emit('packet', this.buffer.subarray(0, 41 + payloadLen));
           this.buffer = this.buffer.subarray(41 + payloadLen);
-        } else {
-          break;
-        }
+        } else { break; }
       }
     });
   }
@@ -35,7 +33,8 @@ export class TcpClient {
 
   constructor(private nodeId: Buffer, private fm: FileManager, private nd: NetworkDirectory) {}
 
-  public connect(ip: string, port: number, manifestToShare: any = null, autoDownload: boolean = false) {
+  // Ajout du paramètre messageToSend
+  public connect(ip: string, port: number, manifestToShare: any = null, autoDownload: boolean = false, messageToSend: string | null = null) {
     this.socket = net.createConnection({ host: ip, port: port }, () => {
       this.socket?.write(this.buildPacket(PacketType.HANDSHAKE, this.session.ephemeralPublicKey));
     });
@@ -51,6 +50,17 @@ export class TcpClient {
       if (type === PacketType.HANDSHAKE) {
         this.remoteNodeId = senderId;
         this.session.deriveSharedSecret(payload);
+        
+        // NOUVEAU : Envoi du message chiffré si demandé
+        if (messageToSend) {
+          const encMsg = this.session.encrypt(Buffer.from(messageToSend));
+          // S'assurer que PacketType.MSG = 0x03 dans types.ts
+          this.socket?.write(this.buildPacket(3, encMsg)); 
+          console.log(`✅ Message chiffré envoyé avec succès !`);
+          this.socket?.destroy(); // On ferme la connexion après l'envoi
+          return;
+        }
+
         if (manifestToShare) {
           const enc = this.session.encrypt(Buffer.from(JSON.stringify(manifestToShare)));
           this.socket?.write(this.buildPacket(PacketType.MANIFEST, enc));
@@ -60,7 +70,6 @@ export class TcpClient {
         try {
           const dec = this.session.decrypt(payload);
           this.manifest = JSON.parse(dec.toString());
-          
           this.nd.updateFile(this.manifest, this.remoteNodeId);
 
           if (autoDownload && !this.fm.hasFile(this.manifest.fileHash || this.manifest.file_id)) {
@@ -77,23 +86,19 @@ export class TcpClient {
           const chunk = this.session.decrypt(payload);
           this.fm.saveChunk(this.manifest.fileName || this.manifest.filename, this.chunkIdx, chunk);
           this.chunkIdx++;
-          
           const pct = Math.floor((this.chunkIdx / this.manifest.chunks.length) * 100);
           process.stdout.write(`\r[PROGRESSION] ${pct}% (${this.chunkIdx}/${this.manifest.chunks.length})`);
-          
           if (this.chunkIdx < this.manifest.chunks.length) {
             this.request();
           } else {
             console.log(`\n✅ Fichier synchronisé avec succès ! Tapez 'archipel>' pour continuer.`);
           }
-        } catch (e) {
-            console.log(`\n❌ Erreur de déchiffrement du chunk ${this.chunkIdx}`);
-        }
+        } catch (e) {}
       }
     });
   }
 
-  private buildPacket(type: PacketType, payload: Buffer): Buffer {
+  private buildPacket(type: PacketType | number, payload: Buffer): Buffer {
     const buf = Buffer.alloc(41 + payload.length);
     buf.writeUInt32BE(0x41524348, 0); 
     buf.writeUInt8(type, 4);
@@ -106,11 +111,9 @@ export class TcpClient {
   private request() {
     if (!this.manifest) return;
     const p = Buffer.alloc(68);
-    // Assure la compatibilité avec toutes les clés possibles du JSON
     const hashToRequest = this.manifest.file_id || this.manifest.fileHash || this.manifest.fileName || "unknown";
     Buffer.from(hashToRequest).copy(p, 0);
     p.writeUInt32BE(this.chunkIdx, 64);
     this.socket?.write(this.buildPacket(PacketType.CHUNK_REQ, this.session.encrypt(p)));
   }
 }
-// FIN DU FICHIER

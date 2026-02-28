@@ -34,7 +34,6 @@ export class CLI {
       if (input.startsWith('archipel ')) input = input.replace('archipel ', '');
       if (!input) { this.rl.prompt(); return; }
 
-      // Amélioration : permet de lire les arguments avec des guillemets correctement
       const args = input.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
       const cmd = args[0].toLowerCase();
 
@@ -46,41 +45,60 @@ export class CLI {
         case 'peers': this.showPeers(); break;
         case 'status': this.showStatus(); break;
         case 'files': this.showFiles(); break;
+        
+        // ---------------- APPROUVER UN PAIR (TRUST) ---------------- [cite: 335, 343]
         case 'trust':
           const targetId = args[1];
           if (!targetId) console.log("❌ Syntaxe : trust <node_id>");
           else {
-            this.trustedPeers.add(targetId.replace(/"/g, ''));
+            this.trustedPeers.add(targetId.replace(/"/g, '').substring(0,8));
             console.log(`✅ [Web of Trust] Nœud ${targetId} approuvé localement.`);
           }
           break;
+          
+        // ---------------- TÉLÉCHARGER (DOWNLOAD) ---------------- [cite: 333, 341]
         case 'download':
           let fileName = args[1];
-          if (!fileName) {
-            console.log("❌ Syntaxe : download <nom_du_fichier>");
-            break;
-          }
-          
-          // Nettoyage des guillemets pour la recherche
+          if (!fileName) { console.log("❌ Syntaxe : download <nom_du_fichier>"); break; }
           fileName = fileName.replace(/"/g, '');
-          
           const results = this.networkDirectory.searchFiles(fileName);
-          if (results.length === 0) {
-            console.log(`❌ Fichier '${fileName}' introuvable sur le réseau.`);
-            break;
-          }
+          if (results.length === 0) { console.log(`❌ Fichier '${fileName}' introuvable.`); break; }
+          const owner = this.discovery.peerTable.getPeers().find(p => p.node_id === results[0].ownerId);
+          if (!owner) { console.log(`❌ Pair hors ligne.`); break; }
+          console.log(`📥 Téléchargement de ${fileName} depuis ${owner.ip}...`);
+          const dlClient = new TcpClient(Buffer.from(this.nodeIdHex, 'hex'), this.fileManager, this.networkDirectory);
+          dlClient.connect(owner.ip, owner.tcp_port, null, true);
+          break;
 
-          const fileInfo = results[0];
-          const owner = this.discovery.peerTable.getPeers().find(p => p.node_id === fileInfo.ownerId);
+        // ---------------- ENVOYER UN MESSAGE (MSG) ---------------- [cite: 330, 338]
+        case 'msg':
+          const msgTarget = args[1]?.replace(/"/g, '');
+          const messageText = args.slice(2).join(' ').replace(/"/g, '');
+          if (!msgTarget || !messageText) { console.log("❌ Syntaxe : msg <node_id> <texte>"); break; }
           
-          if (!owner) {
-            console.log(`❌ Le propriétaire du fichier (${fileInfo.ownerId.substring(0,8)}) n'est plus en ligne.`);
-            break;
-          }
+          const msgPeer = this.discovery.peerTable.getPeers().find(p => p.node_id.startsWith(msgTarget));
+          if (!msgPeer) { console.log(`❌ Pair ${msgTarget} introuvable dans la table.`); break; }
+          
+          const msgClient = new TcpClient(Buffer.from(this.nodeIdHex, 'hex'), this.fileManager, this.networkDirectory);
+          msgClient.connect(msgPeer.ip, msgPeer.tcp_port, null, false, messageText);
+          break;
 
-          console.log(`📥 Initiation du téléchargement de ${fileName} depuis ${owner.ip}...`);
-          const client = new TcpClient(Buffer.from(this.nodeIdHex, 'hex'), this.fileManager, this.networkDirectory);
-          client.connect(owner.ip, owner.tcp_port, null, true);
+        // ---------------- POUSSER UN FICHIER (SEND) ---------------- [cite: 331, 339]
+        case 'send':
+          const sendTarget = args[1]?.replace(/"/g, '');
+          const filePath = args[2]?.replace(/"/g, '');
+          if (!sendTarget || !filePath) { console.log("❌ Syntaxe : send <node_id> <nom_fichier>"); break; }
+          
+          const sendPeer = this.discovery.peerTable.getPeers().find(p => p.node_id.startsWith(sendTarget));
+          if (!sendPeer) { console.log(`❌ Pair ${sendTarget} introuvable.`); break; }
+          
+          const manifest = this.fileManager.shareFile(filePath);
+          if (!manifest) { console.log(`❌ Impossible de lire ${filePath} dans shared/`); break; }
+          
+          console.log(`📤 Push du manifeste de ${filePath} vers ${sendTarget}...`);
+          const sendClient = new TcpClient(Buffer.from(this.nodeIdHex, 'hex'), this.fileManager, this.networkDirectory);
+          sendClient.connect(sendPeer.ip, sendPeer.tcp_port, manifest, false);
+          console.log(`✅ Push terminé ! Le pair peut maintenant faire 'download ${filePath}'.`);
           break;
 
         case '/ask':
@@ -93,9 +111,8 @@ export class CLI {
           console.log("Fermeture...");
           process.exit(0);
           break;
-        default: console.log(`❌ Commande inconnue: ${cmd}.`); break;
+        default: console.log(`❌ Commande inconnue.`); break;
       }
-      
       setTimeout(() => this.rl.prompt(), 100);
     });
   }
@@ -106,6 +123,8 @@ peers                   : Lister les pairs découverts
 status                  : Afficher l'état du nœud
 files                   : Voir les fichiers disponibles sur le réseau
 download <nom_fichier>  : Télécharger un fichier depuis un pair
+send <node_id> <fichier>: Pousser un fichier vers un pair
+msg <node_id> <texte>   : Envoyer un message texte chiffré E2E
 trust <node_id>         : Approuver la clé d'un pair (Web of Trust)
 /ask <question>         : Poser une question à l'assistant IA
 exit                    : Quitter\n`);
