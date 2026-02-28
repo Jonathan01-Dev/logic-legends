@@ -1,4 +1,3 @@
-// src/network/tcpServer.ts
 import { EventEmitter } from 'events';
 import net from 'net';
 import { PacketType } from './types';
@@ -8,12 +7,10 @@ import { FileManager } from './fileManager';
 class TcpStreamParser extends EventEmitter {
   private buffer: Buffer = Buffer.alloc(0);
   private readonly HEADER_SIZE = 41;
-
   constructor(private socket: net.Socket) {
     super();
     this.socket.on('data', (chunk) => this.handleData(chunk as Buffer));
   }
-
   private handleData(chunk: Buffer) {
     this.buffer = Buffer.concat([this.buffer, chunk]);
     while (this.buffer.length >= this.HEADER_SIZE) {
@@ -32,72 +29,43 @@ class TcpStreamParser extends EventEmitter {
 
 export class TcpServer {
   private server: net.Server;
-  private nodeId: Buffer;
-  private port: number;
-  private fileManager: FileManager;
-  public networkManifests: Map<string, any> = new Map();
-
-  constructor(nodeId: Buffer, port: number, fileManager: FileManager) {
-    this.nodeId = nodeId;
-    this.port = port;
-    this.fileManager = fileManager;
+  constructor(private nodeId: Buffer, private port: number, private fileManager: FileManager) {
     this.server = net.createServer((socket) => this.handleConnection(socket));
   }
-
   public start() {
-    this.server.listen(this.port, () => {
-      console.log(`[TCP] Serveur en écoute sur le port ${this.port}`);
-    });
+    this.server.listen(this.port, '0.0.0.0', () => console.log(`[TCP SERVER] Actif sur port ${this.port}`));
   }
-
   private buildPacket(type: PacketType, payload: Buffer): Buffer {
     const buf = Buffer.alloc(41 + payload.length);
-    buf.writeUInt32BE(0x41524348, 0); // MAGIC "ARCH"
-    buf.writeUInt8(type, 4);
-    this.nodeId.copy(buf, 5);
-    buf.writeUInt32BE(payload.length, 37);
-    payload.copy(buf, 41);
-    return buf;
+    buf.writeUInt32BE(0x41524348, 0); buf.writeUInt8(type, 4);
+    this.nodeId.copy(buf, 5); buf.writeUInt32BE(payload.length, 37);
+    payload.copy(buf, 41); return buf;
   }
-
   private handleConnection(socket: net.Socket) {
+    socket.on('error', (err: any) => { if (err.code !== 'ECONNRESET') console.error(err); });
     const parser = new TcpStreamParser(socket);
     const session = new CryptoSession();
-
-    // Handshake initial
     socket.write(this.buildPacket(PacketType.HANDSHAKE, session.ephemeralPublicKey));
-
     parser.on('packet', (packetBuffer: Buffer) => {
       const type = packetBuffer.readUInt8(4);
       const payload = packetBuffer.subarray(41, 41 + packetBuffer.readUInt32BE(37));
-
-      if (type === PacketType.HANDSHAKE) {
-        session.deriveSharedSecret(payload);
-      } 
+      if (type === PacketType.HANDSHAKE) session.deriveSharedSecret(payload);
       else if (type === PacketType.MANIFEST) {
         try {
-          const decrypted = session.decrypt(payload); //
+          const decrypted = session.decrypt(payload);
           const manifest = JSON.parse(decrypted.toString('utf-8'));
-          this.networkManifests.set(manifest.fileHash, manifest);
-          console.log(`[TCP] Manifeste reçu : ${manifest.fileName}`);
-        } catch (err) { console.error("[TCP] Erreur Manifeste"); }
+          this.fileManager.registerRemoteManifest(manifest);
+          console.log(`[TCP SERVER] Manifeste reçu : ${manifest.fileName}`);
+        } catch (err) { console.error("[SERVER] Erreur Manifeste"); }
       }
       else if (type === PacketType.CHUNK_REQ) {
         try {
-          // Décoder la requête : FileHash (64 hex chars = 32 bytes) + Index (4 bytes)
           const decrypted = session.decrypt(payload);
           const fileHash = decrypted.subarray(0, 64).toString('utf-8');
           const chunkIndex = decrypted.readUInt32BE(64);
-
-          console.log(`[TCP] Requête de morceau reçue : Index ${chunkIndex}`);
-
-          // Récupérer le morceau sur le disque
           const chunkData = this.fileManager.getChunk(fileHash, chunkIndex);
-          if (chunkData) {
-            const encryptedChunk = session.encrypt(chunkData); //
-            socket.write(this.buildPacket(PacketType.CHUNK_DATA, encryptedChunk));
-          }
-        } catch (err) { console.error("[TCP] Erreur Chunk Request"); }
+          if (chunkData) socket.write(this.buildPacket(PacketType.CHUNK_DATA, session.encrypt(chunkData)));
+        } catch (err) { console.error("[SERVER] Erreur CHUNK_REQ"); }
       }
     });
   }
