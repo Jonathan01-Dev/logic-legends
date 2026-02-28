@@ -38,7 +38,7 @@ export class Discovery {
 
         if (isNew) {
           console.log(`[UDP] Nouveau pair : ${rinfo.address}:${remoteTcpPort}`);
-          // LA CORRECTION EST ICI : On passe bien les 3 arguments requis
+          // CORRECTION : Passage des 3 arguments obligatoires
           const client = new TcpClient(this.nodeId, this.fileManager, this.networkDirectory);
           client.connect(rinfo.address, remoteTcpPort, this.manifestToShare);
         }

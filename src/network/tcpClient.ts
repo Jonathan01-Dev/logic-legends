@@ -102,7 +102,7 @@ export class TcpClient {
           const pct = Math.floor((this.nextChunkIndex / this.currentManifest!.chunks.length) * 100);
           process.stdout.write(`\r[TRANSFERT] ${pct}% (${this.nextChunkIndex}/${this.currentManifest!.chunks.length})`);
           if (this.nextChunkIndex < this.currentManifest!.chunks.length) this.requestNextChunk();
-          else console.log("\n✅ Reçu !");
+          else console.log("\n✅ Transfert terminé !");
         } catch (e) { console.error("[CLIENT] Erreur chunk"); }
       }
     });
