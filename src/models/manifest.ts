@@ -3,22 +3,19 @@ import crypto from 'crypto';
 
 export interface FileChunk {
   index: number;
-  hash: string; // Hash SHA-256 du morceau pour vérification
+  hash: string;
 }
 
 export interface FileManifest {
   fileName: string;
   totalSize: number;
-  fileHash: string;   // Hash global du fichier complet
-  chunkSize: number;  // Fixé à 1024 octets par le protocole
+  fileHash: string;
+  chunkSize: number;
   chunks: FileChunk[];
 }
 
-/**
- * Utilitaire pour découper un fichier et générer son manifeste
- */
 export function generateManifest(fileName: string, fileBuffer: Buffer): FileManifest {
-  const CHUNK_SIZE = 1024; 
+  const CHUNK_SIZE = 1024; // Taille fixe imposée
   const chunks: FileChunk[] = [];
   
   const totalHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');

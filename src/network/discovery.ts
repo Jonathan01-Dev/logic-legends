@@ -4,18 +4,21 @@ import { MULTICAST_IP, MULTICAST_PORT, PacketType } from './types';
 import { PeerTable } from './peerTable';
 import { TcpClient } from './tcpClient';
 import { FileManager } from './fileManager';
+import { FileManifest } from '../models/manifest';
 
 export class Discovery {
   private socket: dgram.Socket;
   private nodeId: Buffer;
   private tcpPort: number;
   private fileManager: FileManager;
+  private manifestToShare: FileManifest | null;
   public peerTable: PeerTable;
 
-  constructor(nodeId: Buffer, tcpPort: number, fileManager: FileManager) {
+  constructor(nodeId: Buffer, tcpPort: number, fileManager: FileManager, manifestToShare: FileManifest | null = null) {
     this.nodeId = nodeId;
     this.tcpPort = tcpPort;
     this.fileManager = fileManager;
+    this.manifestToShare = manifestToShare;
     this.peerTable = new PeerTable();
     this.socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
   }
@@ -37,13 +40,14 @@ export class Discovery {
 
         const remoteTcpPort = msg.readUInt16BE(41);
         const isNew = !this.peerTable.getPeers().some(p => p.node_id === senderId.toString('hex'));
+        
         this.peerTable.upsert(senderId, rinfo.address, remoteTcpPort);
 
         if (isNew) {
-          // Transmission du fileManager au client TCP
+          console.log(`[UDP] Nouveau pair détecté : ${rinfo.address}:${remoteTcpPort}. Connexion...`);
+          // On crée le client en lui passant le fileManager et le VRAI manifeste
           const client = new TcpClient(this.nodeId, this.fileManager);
-          // Optionnel : on peut passer le manifeste local ici pour le partager direct
-          client.connect(rinfo.address, remoteTcpPort);
+          client.connect(rinfo.address, remoteTcpPort, this.manifestToShare);
         }
       }
     });
@@ -58,6 +62,6 @@ export class Discovery {
       buf.writeUInt32BE(2, 37);
       buf.writeUInt16BE(this.tcpPort, 41);
       this.socket.send(buf, MULTICAST_PORT, MULTICAST_IP);
-    }, 30000);
+    }, 10000); // Hello toutes les 10s pour accélérer les tests
   }
 }
