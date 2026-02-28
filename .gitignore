@@ -4,3 +4,7 @@ node_modules/
 *.archipel
 *.db
 keys/
+# Ignorer le contenu du dossier de partage P2P
+shared/*
+# Mais garder le dossier lui-même (via un fichier .gitkeep si tu veux)
+!shared/.gitkeep

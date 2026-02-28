@@ -4,6 +4,9 @@ import { EventEmitter } from 'events';
 import { PacketType } from './types';
 import { CryptoSession } from '../crypto/session';
 
+/**
+ * Parseur de flux TCP pour extraire les paquets au format ARCH
+ */
 class TcpStreamParser extends EventEmitter {
   private buffer: Buffer = Buffer.alloc(0);
   private readonly HEADER_SIZE = 41;
@@ -15,14 +18,17 @@ class TcpStreamParser extends EventEmitter {
 
   private handleData(chunk: Buffer) {
     this.buffer = Buffer.concat([this.buffer, chunk]);
+
     while (this.buffer.length >= this.HEADER_SIZE) {
       const magic = this.buffer.readUInt32BE(0);
-      if (magic !== 0x41524348) {
+      if (magic !== 0x41524348) { // MAGIC "ARCH"
         this.socket.destroy();
         return;
       }
+
       const payloadLen = this.buffer.readUInt32BE(37);
       const totalPacketSize = this.HEADER_SIZE + payloadLen;
+
       if (this.buffer.length >= totalPacketSize) {
         const fullPacket = this.buffer.subarray(0, totalPacketSize);
         this.buffer = this.buffer.subarray(totalPacketSize);
@@ -34,6 +40,9 @@ class TcpStreamParser extends EventEmitter {
   }
 }
 
+/**
+ * Client TCP pour initier les connexions et envoyer des données chiffrées
+ */
 export class TcpClient {
   private socket: net.Socket | null = null;
   private session: CryptoSession;
@@ -41,37 +50,33 @@ export class TcpClient {
 
   constructor(nodeId: Buffer) {
     this.nodeId = nodeId;
-    this.session = new CryptoSession();
+    this.session = new CryptoSession(); // Session unique pour cette connexion
   }
 
-  private buildHandshakePacket(ephemeralKey: Buffer): Buffer {
-    const buf = Buffer.alloc(41 + 32);
+  /**
+   * Construit un paquet au format binaire ARCH
+   */
+  private buildPacket(type: PacketType, payload: Buffer): Buffer {
+    const buf = Buffer.alloc(41 + payload.length);
     buf.writeUInt32BE(0x41524348, 0);       // MAGIC
-    buf.writeUInt8(PacketType.HANDSHAKE, 4); // TYPE 0x08
-    this.nodeId.copy(buf, 5);               // NODE_ID
-    buf.writeUInt32BE(32, 37);              // PAYLOAD_LEN
-    ephemeralKey.copy(buf, 41);             // CLÉ X25519
+    buf.writeUInt8(type, 4);                // TYPE
+    this.nodeId.copy(buf, 5);               // SENDER_ID (32 bytes)
+    buf.writeUInt32BE(payload.length, 37);  // PAYLOAD_LEN
+    payload.copy(buf, 41);                  // PAYLOAD
     return buf;
   }
 
-  // NOUVEAU : Fonction pour forger un paquet MSG chiffré
-  private buildMsgPacket(encryptedPayload: Buffer): Buffer {
-    const buf = Buffer.alloc(41 + encryptedPayload.length);
-    buf.writeUInt32BE(0x41524348, 0);       // MAGIC
-    buf.writeUInt8(PacketType.MSG, 4);      // TYPE 0x03
-    this.nodeId.copy(buf, 5);               // NODE_ID
-    buf.writeUInt32BE(encryptedPayload.length, 37); // PAYLOAD_LEN
-    encryptedPayload.copy(buf, 41);         // PAYLOAD CHIFFRÉ
-    return buf;
-  }
-
-  public connect(ip: string, port: number) {
+  /**
+   * Initie la connexion vers un pair et lance le Handshake
+   */
+  public connect(ip: string, port: number, manifestToShare?: any) {
     console.log(`[TCP CLIENT] Tentative de connexion vers ${ip}:${port}...`);
     
     this.socket = net.createConnection({ host: ip, port: port }, () => {
-      console.log(`[TCP CLIENT] Connecté à ${ip}:${port}. Envoi de notre clé X25519...`);
-      const handshakePacket = this.buildHandshakePacket(this.session.ephemeralPublicKey);
-      this.socket?.write(handshakePacket);
+      console.log(`[TCP CLIENT] Connecté. Envoi de la clé éphémère X25519...`);
+      // 1. Envoi immédiat de notre clé publique pour le Handshake
+      const handshake = this.buildPacket(PacketType.HANDSHAKE, this.session.ephemeralPublicKey);
+      this.socket?.write(handshake);
     });
 
     const parser = new TcpStreamParser(this.socket);
@@ -82,21 +87,23 @@ export class TcpClient {
       const payload = packetBuffer.subarray(41, 41 + payloadLen);
 
       if (type === PacketType.HANDSHAKE) {
-        console.log(`[TCP CLIENT] Handshake reçu de ${ip}. Calcul du secret AES...`);
-        this.session.deriveSharedSecret(payload);
+        console.log(`[TCP CLIENT] Handshake réussi avec ${ip}.`);
+        this.session.deriveSharedSecret(payload); // Calcul du secret AES
         
-        // --- LE TEST DU FEU : ENVOI D'UN MESSAGE CHIFFRÉ ---
-        const testMessage = "Salut Archipel ! Ceci est un message top secret chiffré en AES-256-GCM.";
-        const encryptedMsg = this.session.encrypt(Buffer.from(testMessage, 'utf-8'));
-        const msgPacket = this.buildMsgPacket(encryptedMsg);
-        
-        this.socket?.write(msgPacket);
-        console.log(`[TCP CLIENT] Message de test chiffré et envoyé avec succès !`);
+        // 2. Si un manifeste est prêt, on l'envoie immédiatement (Sprint 3)
+        if (manifestToShare) {
+          const manifestData = Buffer.from(JSON.stringify(manifestToShare));
+          const encryptedManifest = this.session.encrypt(manifestData); // Chiffrement AES-GCM
+          
+          const packet = this.buildPacket(PacketType.MANIFEST, encryptedManifest);
+          this.socket?.write(packet);
+          console.log(`[TCP CLIENT] Manifeste chiffré envoyé à ${ip} !`);
+        }
       } 
       else if (type === PacketType.MSG) {
         try {
           const decrypted = this.session.decrypt(payload);
-          console.log(`[TCP CLIENT] Message déchiffré reçu : ${decrypted.toString('utf-8')}`);
+          console.log(`[TCP CLIENT] Message reçu : ${decrypted.toString('utf-8')}`);
         } catch (err: any) {
           console.error(`[TCP CLIENT] Échec déchiffrement : ${err.message}`);
         }
