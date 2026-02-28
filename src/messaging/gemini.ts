@@ -7,9 +7,9 @@ export async function queryGemini(conversationContext: string, userQuery: string
   }
 
   try {
-    // Appel direct à l'API Gemini comme exigé par le document technique
+    // CORRECTION ICI : Utilisation du modèle gemini-1.5-flash (standard actuel) au lieu de gemini-pro
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -35,3 +35,4 @@ export async function queryGemini(conversationContext: string, userQuery: string
     return `❌ Impossible de joindre les serveurs IA (${error.message}). Le réseau Archipel repasse en mode 100% hors-ligne.`;
   }
 }
+// FIN DU FICHIER
