@@ -1,38 +1,25 @@
 // src/network/discovery.ts
 import dgram from 'dgram';
-import { networkInterfaces } from 'os';
 import { MULTICAST_IP, MULTICAST_PORT, PacketType } from './types';
 import { PeerTable } from './peerTable';
-
-/** Retourne la première IP locale IPv4 non-loopback (ex: 192.168.x.x) */
-function getLocalIP(): string {
-  const nets = networkInterfaces();
-  for (const name of Object.keys(nets)) {
-    for (const net of nets[name]!) {
-      if (net.family === 'IPv4' && !net.internal) {
-        return net.address;
-      }
-    }
-  }
-  return '0.0.0.0';
-}
+import { TcpClient } from './tcpClient'; // Import du TcpClient pour initier le Handshake
 
 export class Discovery {
   private socket: dgram.Socket;
   private nodeId: Buffer;
   private tcpPort: number;
-  public peerTable: PeerTable; // Accessible pour le reste de l'application
+  public peerTable: PeerTable;
 
   constructor(nodeId: Buffer, tcpPort: number) {
     this.nodeId = nodeId;
     this.tcpPort = tcpPort;
-    this.peerTable = new PeerTable(); // Instanciation de la mémoire du nœud
+    this.peerTable = new PeerTable();
     this.socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
   }
 
   public start() {
     this.socket.bind(MULTICAST_PORT, '0.0.0.0', () => {
-      // VITAL : On autorise le broadcast, et c'est TOUT. Pas de addMembership !
+      // VITAL : On autorise le broadcast pur
       this.socket.setBroadcast(true);
 
       console.log(`[UDP] Mode BROADCAST LOCAL pur activé sur le port ${MULTICAST_PORT}`);
@@ -73,8 +60,8 @@ export class Discovery {
 
   private buildHelloPacket(): Buffer {
     // Header (41 bytes) + Payload TCP Port (2 bytes) = 43 bytes total
-    const buf = Buffer.alloc(43);
-
+    const buf = Buffer.alloc(43); 
+    
     // 1. Header Archipel
     buf.writeUInt32BE(0x41524348, 0);       // MAGIC "ARCH"
     buf.writeUInt8(PacketType.HELLO, 4);    // TYPE 0x01
@@ -98,7 +85,7 @@ export class Discovery {
     const type = msg.readUInt8(4);
     if (type === PacketType.HELLO) {
       const senderId = msg.subarray(5, 37);
-
+      
       // On s'ignore soi-même
       if (senderId.equals(this.nodeId)) return;
 
@@ -106,9 +93,19 @@ export class Discovery {
       const payloadLen = msg.readUInt32BE(37);
       if (payloadLen >= 2) {
         const remoteTcpPort = msg.readUInt16BE(41);
+        const idHex = senderId.toString('hex');
+        
+        // 1. Vérifier si c'est un TOUT NOUVEAU voisin avant de l'ajouter
+        const isNewPeer = !this.peerTable.getPeers().some(p => p.node_id === idHex);
 
-        // Enregistrement dans la Peer Table (Module 1.2)
+        // 2. Enregistrement / Mise à jour dans la Peer Table (Module 1.2)
         this.peerTable.upsert(senderId, rinfo.address, remoteTcpPort);
+
+        // 3. SI C'EST UN NOUVEAU NŒUD, ON LANCE LE HANDSHAKE TCP !
+        if (isNewPeer) {
+          const client = new TcpClient(this.nodeId);
+          client.connect(rinfo.address, remoteTcpPort);
+        }
       }
     }
   }
