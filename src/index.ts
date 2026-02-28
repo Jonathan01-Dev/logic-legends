@@ -24,8 +24,8 @@ const tcpPort = portArg ? parseInt(portArg) : 7777;
 // -------------------------------------------------------------
 // HACK HACKATHON LOCAL : Pour que les 3 terminaux sur le même PC aient des ID différents
 // On remplace les 2 derniers octets de la clé publique par le numéro de port TCP.
-baseNodeId.writeUInt16BE(tcpPort, 30); 
-const nodeId = baseNodeId; 
+baseNodeId.writeUInt16BE(tcpPort, 30);
+const nodeId = baseNodeId;
 // -------------------------------------------------------------
 
 const nodeIdHex = nodeId.toString('hex').substring(0, 8); // Pour l'affichage
@@ -34,7 +34,7 @@ console.log(`\n🚀 Démarrage du Nœud Archipel [ID: ${nodeIdHex}...]`);
 console.log(`--------------------------------------------------`);
 
 // 4. Lancement du Serveur TCP (Module 1.3)
-const tcpServer = new TcpServer(tcpPort);
+const tcpServer = new TcpServer(nodeId, tcpPort);
 tcpServer.start();
 
 // 5. Lancement de la Découverte UDP (Module 1.1)

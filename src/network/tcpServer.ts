@@ -1,14 +1,15 @@
 // src/network/tcpServer.ts
 import { EventEmitter } from 'events';
 import net from 'net';
+import { PacketType } from './types';
+import { CryptoSession } from '../crypto/session';
 
 /**
- * Parseur TLV (Type-Length-Value) pour sécuriser le flux TCP
- * Il garantit qu'on ne traite qu'un paquet complet et valide à la fois.
+ * Parseur TLV (Type-Length-Value)
  */
 class TcpStreamParser extends EventEmitter {
   private buffer: Buffer = Buffer.alloc(0);
-  private readonly HEADER_SIZE = 41; // MAGIC(4) + TYPE(1) + NODE_ID(32) + PAYLOAD_LEN(4)
+  private readonly HEADER_SIZE = 41; 
 
   constructor(private socket: net.Socket) {
     super();
@@ -16,33 +17,24 @@ class TcpStreamParser extends EventEmitter {
   }
 
   private handleData(chunk: Buffer) {
-    // 1. Accumulation des fragments TCP
     this.buffer = Buffer.concat([this.buffer, chunk]);
 
-    // 2. Boucle d'extraction des paquets
     while (this.buffer.length >= this.HEADER_SIZE) {
-      
-      // Sécurité : Validation stricte du MAGIC "ARCH"
       const magic = this.buffer.readUInt32BE(0);
       if (magic !== 0x41524348) {
-        console.error(`[TCP] Flux corrompu depuis ${this.socket.remoteAddress}, MAGIC invalide.`);
+        console.error(`[TCP] Flux corrompu, MAGIC invalide.`);
         this.socket.destroy();
         return;
       }
 
-      // 3. Lecture de la taille annoncée
       const payloadLen = this.buffer.readUInt32BE(37);
       const totalPacketSize = this.HEADER_SIZE + payloadLen;
 
-      // 4. Découpage si le paquet est entièrement arrivé
       if (this.buffer.length >= totalPacketSize) {
         const fullPacket = this.buffer.subarray(0, totalPacketSize);
         this.buffer = this.buffer.subarray(totalPacketSize);
-        
-        // Émission du buffer propre vers la logique métier
         this.emit('packet', fullPacket);
       } else {
-        // Paquet incomplet, on attend le prochain événement 'data'
         break;
       }
     }
@@ -50,17 +42,18 @@ class TcpStreamParser extends EventEmitter {
 }
 
 /**
- * Serveur TCP Principal (Module 1.3)
+ * Serveur TCP Principal
  */
 export class TcpServer {
   private server: net.Server;
+  private nodeId: Buffer;
   private port: number;
 
-  constructor(port: number) {
+  // Ajout du nodeId dans le constructeur pour pouvoir forger l'en-tête du paquet
+  constructor(nodeId: Buffer, port: number) {
+    this.nodeId = nodeId;
     this.port = port;
     this.server = net.createServer((socket) => this.handleConnection(socket));
-    
-    // Contrainte de charge du hackathon
     this.server.maxConnections = 50; 
   }
 
@@ -70,20 +63,51 @@ export class TcpServer {
     });
   }
 
+  // Fonction pour construire le paquet contenant la clé X25519
+  private buildHandshakePacket(ephemeralKey: Buffer): Buffer {
+    const buf = Buffer.alloc(41 + 32); // Header (41) + Clé X25519 (32)
+    buf.writeUInt32BE(0x41524348, 0);       // MAGIC
+    buf.writeUInt8(PacketType.HANDSHAKE, 4); // TYPE 0x08
+    this.nodeId.copy(buf, 5);               // NODE_ID
+    buf.writeUInt32BE(32, 37);              // PAYLOAD_LEN = 32
+    ephemeralKey.copy(buf, 41);             // PAYLOAD = La clé publique
+    return buf;
+  }
+
   private handleConnection(socket: net.Socket) {
     console.log(`[TCP] Nouvelle connexion de ${socket.remoteAddress}:${socket.remotePort}`);
-    
-    // Contrainte réseau : Keep-alive de 15 secondes
     socket.setKeepAlive(true, 15000); 
 
-    // Instanciation du bouclier anti-fragmentation
     const parser = new TcpStreamParser(socket);
-    
+    const session = new CryptoSession(); // 1 session crypto par connexion
+
+    // 1. Envoi immédiat de notre clé publique éphémère à l'autre nœud
+    const handshakePacket = this.buildHandshakePacket(session.ephemeralPublicKey);
+    socket.write(handshakePacket);
+
+    // 2. Réception des paquets
     parser.on('packet', (packetBuffer: Buffer) => {
       const type = packetBuffer.readUInt8(4);
-      console.log(`[TCP] Paquet reçu ! Type: 0x0${type}, Taille totale: ${packetBuffer.length} bytes`);
+      const payloadLen = packetBuffer.readUInt32BE(37);
+      const payload = packetBuffer.subarray(41, 41 + payloadLen); // Extraction de la data utile
       
-      // TODO Sprint 2 : Envoyer ce buffer au module Crypto de ton collègue
+      if (type === PacketType.HANDSHAKE) {
+        // L'autre nœud nous envoie sa clé publique éphémère (32 bytes)
+        console.log(`[TCP] Handshake reçu. Calcul du secret partagé...`);
+        session.deriveSharedSecret(payload);
+      } 
+      else if (type === PacketType.MSG) {
+        // C'est un message chiffré, on le déchiffre avec AES-256-GCM
+        try {
+          const decrypted = session.decrypt(payload);
+          console.log(`[TCP] Message reçu (Déchiffré) : ${decrypted.toString('utf-8')}`);
+        } catch (err: any) {
+          console.error(`[TCP] Échec du déchiffrement : ${err.message}`);
+        }
+      } 
+      else {
+        console.log(`[TCP] Paquet reçu (Type: 0x0${type}). Pas encore géré.`);
+      }
     });
 
     socket.on('error', (err) => console.error(`[TCP] Erreur socket : ${err.message}`));
