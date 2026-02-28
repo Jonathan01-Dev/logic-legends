@@ -32,13 +32,13 @@ class TcpStreamParser extends EventEmitter {
 
 export class TcpClient {
   private socket: net.Socket | null = null;
-  private session: CryptoSession;
+  private session: CryptoSession = new CryptoSession();
   private currentManifest: FileManifest | null = null;
   private nextChunkIndex: number = 0;
   private remoteNodeId: string = "";
 
   constructor(private nodeId: Buffer, private fileManager: FileManager, private networkDirectory: NetworkDirectory) {
-    this.session = new CryptoSession();
+    if (!this.networkDirectory) throw new Error("NetworkDirectory manquant");
   }
 
   private buildPacket(type: PacketType, payload: Buffer): Buffer {
@@ -53,13 +53,9 @@ export class TcpClient {
     const reqPayload = Buffer.alloc(68);
     Buffer.from(this.currentManifest.fileHash).copy(reqPayload, 0);
     reqPayload.writeUInt32BE(this.nextChunkIndex, 64);
-    
-    // Protection contre le crash ECONNRESET
     try {
         this.socket.write(this.buildPacket(PacketType.CHUNK_REQ, this.session.encrypt(reqPayload)));
-    } catch (e) {
-        console.error("[CLIENT] Impossible d'envoyer la requête, connexion perdue.");
-    }
+    } catch (e) {}
   }
 
   public connect(ip: string, port: number, manifestToShare: FileManifest | null = null) {
@@ -67,10 +63,7 @@ export class TcpClient {
       this.socket?.write(this.buildPacket(PacketType.HANDSHAKE, this.session.ephemeralPublicKey));
     });
 
-    // Capture de l'erreur pour éviter le crash du processus
-    this.socket.on('error', (err: any) => {
-      console.log(`\n[CLIENT] Connexion interrompue (${err.code}).`);
-    });
+    this.socket.on('error', (err: any) => {});
 
     const parser = new TcpStreamParser(this.socket);
     parser.on('packet', (packetBuffer: Buffer) => {
@@ -90,6 +83,7 @@ export class TcpClient {
         try {
           const decrypted = this.session.decrypt(payload);
           const manifest = JSON.parse(decrypted.toString('utf-8'));
+          console.log(`[CLIENT] Manifeste reçu : ${manifest.fileName}`);
           this.networkDirectory.updateFile(manifest, this.remoteNodeId);
           if (!this.fileManager.hasFile(manifest.fileHash)) {
             this.currentManifest = manifest;
@@ -103,14 +97,13 @@ export class TcpClient {
           const chunkData = this.session.decrypt(payload);
           this.fileManager.saveChunk(this.currentManifest!.fileName, this.nextChunkIndex, chunkData);
           this.nextChunkIndex++;
-          const pct = Math.floor((this.nextChunkIndex / this.currentManifest!.chunks.length) * 100);
-          process.stdout.write(`\r[TRANSFERT] ${pct}% (${this.nextChunkIndex}/${this.currentManifest!.chunks.length})`);
-          if (this.nextChunkIndex < this.currentManifest!.chunks.length) {
-              // Petit délai optionnel pour soulager le réseau mobile
-              setImmediate(() => this.requestNextChunk());
+          if (this.nextChunkIndex % 50 === 0) {
+              const pct = Math.floor((this.nextChunkIndex / this.currentManifest!.chunks.length) * 100);
+              process.stdout.write(`\r[TRANSFERT] ${pct}%`);
           }
-          else console.log("\n✅ Transfert terminé !");
-        } catch (e) { console.error("[CLIENT] Erreur chunk"); }
+          if (this.nextChunkIndex < this.currentManifest!.chunks.length) this.requestNextChunk();
+          else console.log("\n✅ Reçu sur PC 3 !");
+        } catch (e) {}
       }
     });
   }

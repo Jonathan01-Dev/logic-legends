@@ -32,13 +32,14 @@ export class Discovery {
 
         const remoteTcpPort = msg.readUInt16BE(41);
         const senderIdHex = senderId.toString('hex');
-        const isNew = !this.peerTable.getPeers().some(p => p.node_id === senderIdHex);
         
+        // On vérifie si on connaît déjà ce pair
+        const isNew = !this.peerTable.getPeers().some(p => p.node_id === senderIdHex);
         this.peerTable.upsert(senderId, rinfo.address, remoteTcpPort);
 
+        // Si c'est un nouveau pair, on se connecte en CLIENT pour demander ses fichiers
         if (isNew) {
-          console.log(`[UDP] Nouveau pair : ${rinfo.address}:${remoteTcpPort}`);
-          // CORRECTION : Passage des 3 arguments obligatoires
+          console.log(`[UDP] Nouveau pair détecté (${senderIdHex.substring(0,8)}). Tentative de connexion client...`);
           const client = new TcpClient(this.nodeId, this.fileManager, this.networkDirectory);
           client.connect(rinfo.address, remoteTcpPort, this.manifestToShare);
         }
@@ -47,15 +48,19 @@ export class Discovery {
 
     this.socket.bind(MULTICAST_PORT, '0.0.0.0', () => {
       this.socket.setBroadcast(true);
-      setInterval(() => {
-        const buf = Buffer.alloc(43);
-        buf.writeUInt32BE(0x41524348, 0);
-        buf.writeUInt8(PacketType.HELLO, 4);
-        this.nodeId.copy(buf, 5);
-        buf.writeUInt32BE(2, 37);
-        buf.writeUInt16BE(this.tcpPort, 41);
-        this.socket.send(buf, MULTICAST_PORT, MULTICAST_IP);
-      }, 10000);
+      this.socket.addMembership(MULTICAST_IP); // Force l'écoute multicast
+      this.sendHello();
+      setInterval(() => this.sendHello(), 10000);
     });
+  }
+
+  private sendHello() {
+    const buf = Buffer.alloc(43);
+    buf.writeUInt32BE(0x41524348, 0);
+    buf.writeUInt8(PacketType.HELLO, 4);
+    this.nodeId.copy(buf, 5);
+    buf.writeUInt32BE(2, 37);
+    buf.writeUInt16BE(this.tcpPort, 41);
+    this.socket.send(buf, MULTICAST_PORT, MULTICAST_IP);
   }
 }
