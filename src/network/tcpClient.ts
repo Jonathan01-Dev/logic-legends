@@ -56,6 +56,7 @@ export class TcpClient {
 
   public connect(ip: string, port: number, manifestToShare: FileManifest | null = null) {
     this.socket = net.createConnection({ host: ip, port: port }, () => {
+      console.log(`[TCP CLIENT] Connecté à ${ip}. Envoi Handshake...`);
       this.socket?.write(this.buildPacket(PacketType.HANDSHAKE, this.session.ephemeralPublicKey));
     });
 
@@ -68,7 +69,11 @@ export class TcpClient {
 
       if (type === PacketType.HANDSHAKE) {
         this.session.deriveSharedSecret(payload);
+        console.log(`[TCP CLIENT] Session sécurisée avec ${ip}.`);
+        
+        // Si on a un fichier, on l'envoie. Sinon, on attend que l'autre nous envoie le sien.
         if (manifestToShare) {
+          console.log(`[TCP CLIENT] Envoi du manifeste local...`);
           const encrypted = this.session.encrypt(Buffer.from(JSON.stringify(manifestToShare)));
           this.socket?.write(this.buildPacket(PacketType.MANIFEST, encrypted));
         }
@@ -77,13 +82,17 @@ export class TcpClient {
         try {
           const decrypted = this.session.decrypt(payload);
           const manifest = JSON.parse(decrypted.toString('utf-8'));
+          console.log(`[TCP CLIENT] Manifeste distant reçu: ${manifest.fileName}`);
+
           if (!this.fileManager.hasFile(manifest.fileHash)) {
             this.currentManifest = manifest;
             this.nextChunkIndex = 0;
-            console.log(`\n[CLIENT] Réception de : ${manifest.fileName}. Lancement...`);
+            console.log(`[TCP CLIENT] Démarrage du téléchargement...`);
             this.requestNextChunk();
+          } else {
+            console.log(`[TCP CLIENT] Fichier déjà possédé.`);
           }
-        } catch (e) { console.error("\n[CLIENT] Erreur déchiffrement manifeste"); }
+        } catch (e) { console.error("[CLIENT] Erreur déchiffrement manifeste"); }
       }
       else if (type === PacketType.CHUNK_DATA) {
         try {
@@ -95,13 +104,14 @@ export class TcpClient {
             this.fileManager.saveChunk(this.currentManifest.fileName, this.nextChunkIndex, chunkData);
             this.nextChunkIndex++;
             
-            if (this.nextChunkIndex % 50 === 0 || this.nextChunkIndex === this.currentManifest.chunks.length) {
-                const pct = Math.floor((this.nextChunkIndex / this.currentManifest.chunks.length) * 100);
-                process.stdout.write(`\r[PROGRESSION] ${pct}% (${this.nextChunkIndex}/${this.currentManifest.chunks.length})`);
-            }
+            const pct = Math.floor((this.nextChunkIndex / this.currentManifest.chunks.length) * 100);
+            process.stdout.write(`\r[PROGRESSION] ${pct}% (${this.nextChunkIndex}/${this.currentManifest.chunks.length})`);
 
-            if (this.nextChunkIndex < this.currentManifest.chunks.length) this.requestNextChunk();
-            else console.log(`\n✅ TRANSFERT RÉUSSI : ${this.currentManifest.fileName}`);
+            if (this.nextChunkIndex < this.currentManifest.chunks.length) {
+                this.requestNextChunk();
+            } else {
+                console.log(`\n✅ TRANSFERT RÉUSSI: ${this.currentManifest.fileName}`);
+            }
           }
         } catch (e) { console.error("\n[CLIENT] Erreur Chunk"); }
       }
