@@ -51,8 +51,6 @@ export class TcpClient {
       if (type === PacketType.HANDSHAKE) {
         this.remoteNodeId = senderId;
         this.session.deriveSharedSecret(payload);
-        
-        // Suppression du spam crypto ici
         if (manifestToShare) {
           const enc = this.session.encrypt(Buffer.from(JSON.stringify(manifestToShare)));
           this.socket?.write(this.buildPacket(PacketType.MANIFEST, enc));
@@ -65,8 +63,8 @@ export class TcpClient {
           
           this.nd.updateFile(this.manifest, this.remoteNodeId);
 
-          if (autoDownload && !this.fm.hasFile(this.manifest.fileHash)) {
-            console.log(`\n[START] Téléchargement de ${this.manifest.fileName} en cours...`);
+          if (autoDownload && !this.fm.hasFile(this.manifest.fileHash || this.manifest.file_id)) {
+            console.log(`\n[START] Téléchargement de ${this.manifest.fileName || this.manifest.filename} en cours...`);
             this.chunkIdx = 0;
             this.request();
           } else if (!autoDownload) {
@@ -77,7 +75,7 @@ export class TcpClient {
       else if (type === PacketType.CHUNK_DATA) {
         try {
           const chunk = this.session.decrypt(payload);
-          this.fm.saveChunk(this.manifest.fileName, this.chunkIdx, chunk);
+          this.fm.saveChunk(this.manifest.fileName || this.manifest.filename, this.chunkIdx, chunk);
           this.chunkIdx++;
           
           const pct = Math.floor((this.chunkIdx / this.manifest.chunks.length) * 100);
@@ -86,9 +84,11 @@ export class TcpClient {
           if (this.chunkIdx < this.manifest.chunks.length) {
             this.request();
           } else {
-            console.log(`\n✅ Fichier synchronisé avec succès !`);
+            console.log(`\n✅ Fichier synchronisé avec succès ! Tapez 'archipel>' pour continuer.`);
           }
-        } catch (e) {}
+        } catch (e) {
+            console.log(`\n❌ Erreur de déchiffrement du chunk ${this.chunkIdx}`);
+        }
       }
     });
   }
@@ -106,8 +106,11 @@ export class TcpClient {
   private request() {
     if (!this.manifest) return;
     const p = Buffer.alloc(68);
-    Buffer.from(this.manifest.fileHash).copy(p, 0);
+    // Assure la compatibilité avec toutes les clés possibles du JSON
+    const hashToRequest = this.manifest.file_id || this.manifest.fileHash || this.manifest.fileName || "unknown";
+    Buffer.from(hashToRequest).copy(p, 0);
     p.writeUInt32BE(this.chunkIdx, 64);
     this.socket?.write(this.buildPacket(PacketType.CHUNK_REQ, this.session.encrypt(p)));
   }
 }
+// FIN DU FICHIER
