@@ -4,6 +4,7 @@ import { Discovery } from './network/discovery';
 import { TcpServer } from './network/tcpServer';
 import { FileManager } from './network/fileManager';
 import { NetworkDirectory } from './network/networkDirectory';
+import { CLI } from './cli'; // Import du nouveau module
 
 async function main() {
   try {
@@ -12,7 +13,10 @@ async function main() {
     const nodeId = Buffer.from(identity.ed25519.publicKey, 'hex');
 
     const args = process.argv.slice(2);
-    const tcpPort = args[0] ? parseInt(args[0]) : 7777;
+    const tcpPort = args.find(a => !a.startsWith('--')) ? parseInt(args.find(a => !a.startsWith('--')) as string) : 7777;
+    
+    // Détection du flag --no-ai imposé par le hackathon 
+    const aiEnabled = !args.includes('--no-ai');
 
     const fileManager = new FileManager();
     const networkDirectory = new NetworkDirectory();
@@ -32,13 +36,16 @@ async function main() {
     if (localManifest) tcpServer.setManifest(localManifest);
     tcpServer.start();
 
-    // On passe bien networkDirectory ici
     const discovery = new Discovery(nodeId, tcpPort, fileManager, networkDirectory, localManifest);
     discovery.start();
 
-    console.log(`🚀 NŒUD ARCHIPEL [${nodeId.toString('hex').substring(0, 8)}] PRÊT`);
+    // Démarrage de l'interface de commande
+    const cli = new CLI(nodeId.toString('hex'), tcpPort, discovery, fileManager, networkDirectory, aiEnabled);
+    cli.start();
 
-  } catch (error) { console.error("❌ Erreur :", error); }
+  } catch (error) { 
+    console.error("❌ Erreur d'initialisation :", error); 
+  }
 }
 
 main();
