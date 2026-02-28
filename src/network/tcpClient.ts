@@ -1,10 +1,8 @@
 import net from 'net';
-import crypto from 'crypto';
 import { EventEmitter } from 'events';
 import { PacketType } from './types';
 import { CryptoSession } from '../crypto/session';
 import { FileManager } from './fileManager';
-import { FileManifest } from '../models/manifest';
 import { NetworkDirectory } from './networkDirectory';
 
 class TcpStreamParser extends EventEmitter {
@@ -28,24 +26,28 @@ class TcpStreamParser extends EventEmitter {
 export class TcpClient {
   private socket: net.Socket | null = null;
   private session: CryptoSession = new CryptoSession();
-  private currentManifest: FileManifest | null = null;
-  private nextChunkIndex: number = 0;
+  private manifest: any = null;
+  private chunkIdx: number = 0;
+  private remoteNodeId: string = "";
 
-  constructor(private nodeId: Buffer, private fileManager: FileManager, private networkDirectory: NetworkDirectory) {}
+  constructor(private nodeId: Buffer, private fm: FileManager, private nd: NetworkDirectory) {}
 
-  public connect(ip: string, port: number, manifestToShare: FileManifest | null = null) {
+  // Ajout du paramètre autoDownload (désactivé par défaut)
+  public connect(ip: string, port: number, manifestToShare: any = null, autoDownload: boolean = false) {
     this.socket = net.createConnection({ host: ip, port: port }, () => {
       this.socket?.write(this.buildPacket(PacketType.HANDSHAKE, this.session.ephemeralPublicKey));
     });
 
-    this.socket.on('error', (err) => console.log(`[TCP] Erreur : ${err.message}`));
+    this.socket.on('error', () => {}); // Silence les erreurs réseau pour garder le CLI propre
 
     const parser = new TcpStreamParser(this.socket);
     parser.on('packet', (packetBuffer: Buffer) => {
       const type = packetBuffer.readUInt8(4);
+      const senderId = packetBuffer.subarray(5, 37).toString('hex');
       const payload = packetBuffer.subarray(41);
 
       if (type === PacketType.HANDSHAKE) {
+        this.remoteNodeId = senderId;
         this.session.deriveSharedSecret(payload);
         if (manifestToShare) {
           const enc = this.session.encrypt(Buffer.from(JSON.stringify(manifestToShare)));
@@ -55,49 +57,7 @@ export class TcpClient {
       else if (type === PacketType.MANIFEST) {
         try {
           const dec = this.session.decrypt(payload);
-          this.currentManifest = JSON.parse(dec.toString());
-          console.log(`\n[INFO] Manifeste reçu : ${this.currentManifest?.fileName}`);
+          this.manifest = JSON.parse(dec.toString());
           
-          this.networkDirectory.updateFile(this.currentManifest!, "remote");
-
-          if (!this.fileManager.hasFile(this.currentManifest!.fileHash)) {
-            console.log(`[START] Début du téléchargement...`);
-            this.nextChunkIndex = 0;
-            this.requestNextChunk();
-          } else {
-            console.log(`[SKIP] Le fichier ${this.currentManifest?.fileName} est déjà complet dans shared/`);
-          }
-        } catch (e) { console.error("[ERR] Échec lecture manifeste"); }
-      }
-      else if (type === PacketType.CHUNK_DATA) {
-        const data = this.session.decrypt(payload);
-        this.fileManager.saveChunk(this.currentManifest!.fileName, this.nextChunkIndex, data);
-        this.nextChunkIndex++;
-        
-        const pct = Math.floor((this.nextChunkIndex / this.currentManifest!.chunks.length) * 100);
-        process.stdout.write(`\r[PROGRESSION] ${pct}% (${this.nextChunkIndex}/${this.currentManifest!.chunks.length})`);
-        
-        if (this.nextChunkIndex < this.currentManifest!.chunks.length) {
-          this.requestNextChunk();
-        } else {
-          console.log("\n✅ TRANSFERT RÉUSSI !");
-        }
-      }
-    });
-  }
-
-  private buildPacket(type: PacketType, payload: Buffer): Buffer {
-    const buf = Buffer.alloc(41 + payload.length);
-    buf.writeUInt32BE(0x41524348, 0); buf.writeUInt8(type, 4);
-    this.nodeId.copy(buf, 5); buf.writeUInt32BE(payload.length, 37);
-    payload.copy(buf, 41); return buf;
-  }
-
-  private requestNextChunk() {
-    if (!this.currentManifest || !this.socket) return;
-    const p = Buffer.alloc(68);
-    Buffer.from(this.currentManifest.fileHash).copy(p, 0);
-    p.writeUInt32BE(this.nextChunkIndex, 64);
-    this.socket.write(this.buildPacket(PacketType.CHUNK_REQ, this.session.encrypt(p)));
-  }
-}
+          // Indexation silencieuse
+          this.nd

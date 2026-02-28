@@ -9,31 +9,27 @@ export class Discovery {
   private socket: dgram.Socket;
   public peerTable: PeerTable = new PeerTable();
 
-  constructor(private nodeId: Buffer, private tcpPort: number, private fileManager: FileManager, private networkDirectory: NetworkDirectory, private manifestToShare: any = null) {
+  constructor(private nodeId: Buffer, private port: number, private fm: FileManager, private nd: NetworkDirectory, private manifest: any = null) {
     this.socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
   }
 
   public start() {
     this.socket.on('message', (msg, rinfo) => {
-      const magic = msg.readUInt32BE(0);
-      if (magic !== 0x41524348) return;
       const type = msg.readUInt8(4);
-      
+      const senderId = msg.subarray(5, 37);
+      if (senderId.equals(this.nodeId)) return;
+
       if (type === PacketType.HELLO) {
-        const senderId = msg.subarray(5, 37);
-        if (senderId.equals(this.nodeId)) return;
-        
         const remotePort = msg.readUInt16BE(41);
         const senderIdHex = senderId.toString('hex');
-        
-        // On enregistre/met à jour le pair
         const isNew = !this.peerTable.getPeers().some(p => p.node_id === senderIdHex);
+        
         this.peerTable.upsert(senderId, rinfo.address, remotePort);
 
         if (isNew) {
-          console.log(`[UDP] Connexion au nouveau pair : ${rinfo.address}`);
-          const client = new TcpClient(this.nodeId, this.fileManager, this.networkDirectory);
-          client.connect(rinfo.address, remotePort, this.manifestToShare);
+          const client = new TcpClient(this.nodeId, this.fm, this.nd);
+          // On passe false pour ne PAS télécharger automatiquement
+          client.connect(rinfo.address, remotePort, this.manifest, false);
         }
       }
     });
@@ -43,9 +39,13 @@ export class Discovery {
       setInterval(() => {
         const buf = Buffer.alloc(43);
         buf.writeUInt32BE(0x41524348, 0); buf.writeUInt8(PacketType.HELLO, 4);
-        this.nodeId.copy(buf, 5); buf.writeUInt32BE(2, 37); buf.writeUInt16BE(this.tcpPort, 41);
+        this.nodeId.copy(buf, 5); buf.writeUInt32BE(2, 37); buf.writeUInt16BE(this.port, 41);
         this.socket.send(buf, MULTICAST_PORT, MULTICAST_IP);
-      }, 5000);
+      }, 3000);
     });
+  }
+
+  public search(term: string) {
+    // La logique de recherche UDP peut rester ici pour plus tard
   }
 }
